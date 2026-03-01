@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2020 Igara Studio S.A.
+// Copyright (c) 2020-2025 Igara Studio S.A.
 // Copyright (c) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -65,7 +65,7 @@ public:
   void unfreeze();
 
   // Returns true if the mask is frozen (See freeze/unfreeze functions).
-  bool isFrozen() const { return m_freeze_count > 0; }
+  bool isFrozen() const { return m_freezes > 0; }
 
   // Returns true if the mask is a rectangular region.
   bool isRectangular() const;
@@ -75,6 +75,7 @@ public:
 
   // Copies the data from the given mask.
   void copyFrom(const Mask* sourceMask);
+  void fromImage(const Image* image, const gfx::Point& maskOrigin, uint8_t alphaThreshold = 0);
 
   // Replace the whole mask with the given region.
   void replace(const gfx::Rect& bounds);
@@ -106,9 +107,7 @@ public:
   void offsetOrigin(int dx, int dy);
 
 private:
-  void initialize();
-
-  int m_freeze_count;
+  int m_freezes = 0;
   std::string m_name;      // Mask name
   gfx::Rect m_bounds;      // Region bounds
   ImageRef m_bitmap;       // Bitmapped image mask
@@ -116,6 +115,8 @@ private:
 
   Mask& operator=(const Mask& mask);
 };
+
+typedef std::shared_ptr<Mask> MaskRef;
 
 } // namespace doc
 

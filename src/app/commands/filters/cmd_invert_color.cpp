@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2020  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -13,7 +13,6 @@
 #include "app/commands/command.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
-#include "app/commands/filters/filter_worker.h"
 #include "app/commands/new_params.h"
 #include "app/context.h"
 #include "app/ini_file.h"
@@ -60,7 +59,7 @@ protected:
 };
 
 InvertColorCommand::InvertColorCommand()
-  : CommandWithNewParams<InvertColorParams>(CommandId::InvertColor(), CmdRecordableFlag)
+  : CommandWithNewParams<InvertColorParams>(CommandId::InvertColor())
 {
 }
 
@@ -87,7 +86,7 @@ void InvertColorCommand::onExecute(Context* context)
     window.doModal();
   }
   else {
-    start_filter_worker(&filterMgr);
+    filterMgr.startWorker(false);
   }
 }
 

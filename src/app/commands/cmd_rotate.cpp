@@ -14,25 +14,21 @@
 #include "app/commands/cmd_rotate.h"
 #include "app/commands/params.h"
 #include "app/doc_api.h"
-#include "app/doc_range.h"
 #include "app/i18n/strings.h"
 #include "app/modules/gui.h"
 #include "app/sprite_job.h"
 #include "app/tools/tool_box.h"
 #include "app/tx.h"
-#include "app/ui/color_bar.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/status_bar.h"
 #include "app/ui/timeline/timeline.h"
 #include "app/ui/toolbar.h"
-#include "app/util/range_utils.h"
 #include "base/convert_to.h"
 #include "doc/cel.h"
 #include "doc/cels_range.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
-#include "ui/ui.h"
 
 namespace app {
 
@@ -167,7 +163,7 @@ protected:
   }
 };
 
-RotateCommand::RotateCommand() : Command(CommandId::Rotate(), CmdRecordableFlag)
+RotateCommand::RotateCommand() : Command(CommandId::Rotate())
 {
   m_ui = true;
   m_flipMask = false;
@@ -191,6 +187,10 @@ void RotateCommand::onLoadParams(const Params& params)
 
 bool RotateCommand::onEnabled(Context* context)
 {
+  // Because we use the toolbar & editor to transform the selection, this won't work without a UI
+  if (m_flipMask && !context->isUIAvailable())
+    return false;
+
   return context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
                              ContextFlags::HasActiveSprite);
 }
@@ -222,13 +222,7 @@ void RotateCommand::onExecute(Context* context)
         }
       }
 
-      auto range = App::instance()->timeline()->range();
-      if (range.enabled())
-        cels = get_unique_cels_to_edit_pixels(site.sprite(), range);
-      else if (site.cel() && site.layer() && site.layer()->canEditPixels()) {
-        cels.push_back(site.cel());
-      }
-
+      cels = site.selectedUniqueCelsToEditPixels();
       if (cels.empty()) {
         StatusBar::instance()->showTip(1000, Strings::statusbar_tips_all_layers_are_locked());
         return;
@@ -236,9 +230,7 @@ void RotateCommand::onExecute(Context* context)
     }
     // Flip the whole sprite (even locked layers)
     else if (site.sprite()) {
-      for (Cel* cel : site.sprite()->uniqueCels())
-        cels.push_back(cel);
-
+      cels = site.sprite()->uniqueCels().toList();
       rotateSprite = true;
     }
 

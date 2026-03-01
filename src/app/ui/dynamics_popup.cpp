@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2020-2024  Igara Studio S.A.
+// Copyright (C) 2020-2025  Igara Studio S.A.
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,7 +15,6 @@
 #include "app/tools/tool_box.h"
 #include "app/ui/dithering_selector.h"
 #include "app/ui/skin/skin_theme.h"
-#include "os/font.h"
 #include "os/surface.h"
 #include "ui/fit_bounds.h"
 #include "ui/message.h"
@@ -55,8 +54,10 @@ enum {
 // Special slider to set the min/max threshold values of a sensor
 class DynamicsPopup::ThresholdSlider : public Widget {
 public:
-  ThresholdSlider()
+  ThresholdSlider(const char* id)
   {
+    setId(id);
+    setFocusStop(true);
     setExpansive(true);
     initTheme();
   }
@@ -132,11 +133,12 @@ private:
                       theme->parts.miniSliderFull().get());
     }
 
+    const int sensorH = guiscaled_div(rc.h, 4);
     g->fillRect(theme->colors.sliderEmptyText(),
-                gfx::Rect(rc.x, rc.y + rc.h / 2 - rc.h / 8, sensorW, rc.h / 4));
+                gfx::Rect(rc.x, guiscaled_center(rc.y, rc.h, sensorH), sensorW, sensorH));
 
-    g->drawRgbaSurface(thumb, minX - thumb->width() / 2, thumb_y);
-    g->drawRgbaSurface(thumb, maxX - thumb->width() / 2, thumb_y);
+    g->drawRgbaSurface(thumb, minX - guiscaled_div(thumb->width(), 2), thumb_y);
+    g->drawRgbaSurface(thumb, maxX - guiscaled_div(thumb->width(), 2), thumb_y);
   }
 
   bool onProcessMessage(Message* msg) override
@@ -186,6 +188,7 @@ private:
         }
         break;
       }
+      case kFocusEnterMessage: invalidate(); break;
     }
     return Widget::onProcessMessage(msg);
   }
@@ -224,6 +227,8 @@ DynamicsPopup::DynamicsPopup(Delegate* delegate)
   , m_ditheringSel(new DitheringSelector(DitheringSelector::SelectMatrix))
   , m_fromTo(tools::ColorFromTo::BgToFg)
 {
+  setNeedsTabletPressure(true);
+
   m_dynamics->stabilizer()->Click.connect([this]() {
     if (m_dynamics->stabilizer()->isSelected()) {
       if (m_stabilizerFactorBackup == 0) {
@@ -276,8 +281,10 @@ DynamicsPopup::DynamicsPopup(Delegate* delegate)
     Preferences::instance().shared.shareDynamics(sameInAllTools);
   });
   m_dynamics->gradientPlaceholder()->addChild(m_ditheringSel);
-  m_dynamics->pressurePlaceholder()->addChild(m_pressureThreshold = new ThresholdSlider);
-  m_dynamics->velocityPlaceholder()->addChild(m_velocityThreshold = new ThresholdSlider);
+  m_dynamics->pressurePlaceholder()->addChild(
+    m_pressureThreshold = new ThresholdSlider("pressure_slider"));
+  m_dynamics->velocityPlaceholder()->addChild(
+    m_velocityThreshold = new ThresholdSlider("velocity_slider"));
   addChild(m_dynamics);
 }
 

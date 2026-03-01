@@ -9,7 +9,6 @@
   #include "config.h"
 #endif
 
-#include "app/app.h"
 #include "app/cmd/set_layer_opacity.h"
 #include "app/commands/command.h"
 #include "app/commands/params.h"
@@ -40,7 +39,7 @@ private:
   int m_opacity;
 };
 
-LayerOpacityCommand::LayerOpacityCommand() : Command(CommandId::LayerOpacity(), CmdUIOnlyFlag)
+LayerOpacityCommand::LayerOpacityCommand() : Command(CommandId::LayerOpacity())
 {
   m_opacity = 255;
 }
@@ -66,9 +65,9 @@ void LayerOpacityCommand::onExecute(Context* context)
   {
     Tx tx(writer, "Set Layer Opacity");
 
-    // TODO the range of selected frames should be in app::Site.
+    Site site = writer.site();
     SelectedLayers selLayers;
-    auto range = App::instance()->timeline()->range();
+    auto range = site.range();
     if (range.enabled()) {
       selLayers = range.selectedLayers();
     }

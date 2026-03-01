@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -431,8 +431,8 @@ void BrushPopup::regenerate(ui::Display* display, const gfx::Point& pos)
       params.set("change", "custom");
       params.set("slot", base::convert_to<std::string>(slot).c_str());
       KeyPtr key = KeyboardShortcuts::instance()->command(CommandId::ChangeBrush(), params);
-      if (key && !key->accels().empty())
-        shortcut = key->accels().front().toString();
+      if (key && !key->shortcuts().empty())
+        shortcut = key->shortcuts().front().toString();
     }
     m_customBrushes->addItem(new SelectBrushItem(brush, slot));
     m_customBrushes->addItem(new BrushShortcutItem(shortcut, slot));
@@ -489,7 +489,7 @@ os::SurfaceRef BrushPopup::createSurfaceForBrush(const BrushRef& origBrush,
       image = brush->image();
   }
 
-  os::SurfaceRef surface = os::instance()->makeRgbaSurface(
+  os::SurfaceRef surface = os::System::instance()->makeRgbaSurface(
     std::min(kMaxSize, (image ? image->width() : 4)),
     std::min(kMaxSize, (image ? image->height() : 4)));
 
@@ -506,15 +506,15 @@ os::SurfaceRef BrushPopup::createSurfaceForBrush(const BrushRef& origBrush,
                              surface.get(),
                              0,
                              0,
-                             0,
-                             0,
+                             (surface->width() - image->width() - 1) / 2,
+                             (surface->height() - image->height() - 1) / 2,
                              image->width(),
                              image->height());
 
     if (image->pixelFormat() == IMAGE_BITMAP)
       delete palette;
 
-    surface->applyScale(guiscale());
+    surface = surface->applyScale(guiscale());
   }
   else {
     surface->clear();

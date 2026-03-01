@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -18,7 +18,6 @@
 #include "app/commands/commands.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
-#include "app/commands/filters/filter_worker.h"
 #include "app/commands/new_params.h"
 #include "app/context.h"
 #include "app/find_widget.h"
@@ -129,7 +128,7 @@ private:
       case ui::kKeyDownMessage: {
         KeyboardShortcuts* keys = KeyboardShortcuts::instance();
         const KeyPtr key = keys->command(CommandId::SwitchColors());
-        if (key && key->isPressed(msg, *keys)) {
+        if (key && key->isPressed(msg)) {
           // Switch colors
           app::Color from = m_fromButton->getColor();
           app::Color to = m_toButton->getColor();
@@ -159,7 +158,7 @@ protected:
 };
 
 ReplaceColorCommand::ReplaceColorCommand()
-  : CommandWithNewParams<ReplaceColorParams>(CommandId::ReplaceColor(), CmdRecordableFlag)
+  : CommandWithNewParams<ReplaceColorParams>(CommandId::ReplaceColor())
 {
 }
 
@@ -201,7 +200,7 @@ void ReplaceColorCommand::onExecute(Context* context)
       set_config_int(ConfigSection, "Tolerance", filter.getTolerance());
   }
   else {
-    start_filter_worker(&filterMgr);
+    filterMgr.startWorker(false);
   }
 }
 

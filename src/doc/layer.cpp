@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (C) 2019-2021  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -14,8 +14,10 @@
 #include "doc/cel.h"
 #include "doc/grid.h"
 #include "doc/image.h"
+#include "doc/layer_tilemap.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
+#include "doc/tilesets.h"
 
 #include <algorithm>
 #include <cstring>
@@ -27,6 +29,8 @@ Layer::Layer(ObjectType type, Sprite* sprite)
   , m_sprite(sprite)
   , m_parent(NULL)
   , m_flags(LayerFlags(int(LayerFlags::Visible) | int(LayerFlags::Editable)))
+  , m_blendmode(BlendMode::NORMAL)
+  , m_opacity(255)
 {
   ASSERT(type == ObjectType::LayerImage || type == ObjectType::LayerGroup ||
          type == ObjectType::LayerTilemap);
@@ -214,10 +218,7 @@ Cel* Layer::cel(frame_t frame) const
 //////////////////////////////////////////////////////////////////////
 // LayerImage class
 
-LayerImage::LayerImage(ObjectType type, Sprite* sprite)
-  : Layer(type, sprite)
-  , m_blendmode(BlendMode::NORMAL)
-  , m_opacity(255)
+LayerImage::LayerImage(ObjectType type, Sprite* sprite) : Layer(type, sprite)
 {
 }
 
@@ -238,10 +239,11 @@ int LayerImage::getMemSize() const
 
   for (; it != end; ++it) {
     const Cel* cel = *it;
-    size += cel->getMemSize();
 
-    const Image* image = cel->image();
-    size += image->getMemSize();
+    if (cel->link()) // Skip link
+      continue;
+
+    size += cel->getMemSize();
   }
 
   return size;
@@ -568,6 +570,17 @@ void LayerGroup::insertLayer(Layer* layer, Layer* after)
   layer->setParent(this);
 }
 
+void LayerGroup::insertLayerBefore(Layer* layer, Layer* before)
+{
+  auto before_it = m_layers.end();
+  if (before) {
+    before_it = std::find(m_layers.begin(), m_layers.end(), before);
+  }
+  m_layers.insert(before_it, layer);
+
+  layer->setParent(this);
+}
+
 void LayerGroup::stackLayer(Layer* layer, Layer* after)
 {
   ASSERT(layer != after);
@@ -582,6 +595,24 @@ void LayerGroup::displaceFrames(frame_t fromThis, frame_t delta)
 {
   for (Layer* layer : m_layers)
     layer->displaceFrames(fromThis, delta);
+}
+
+layer_t LayerGroup::getLayerIndex(const Layer* layer, layer_t& index) const
+{
+  for (Layer* child : this->layers()) {
+    if ((child->isGroup() && static_cast<LayerGroup*>(child)->getLayerIndex(layer, index) != -1) ||
+        (child == layer)) {
+      return index;
+    }
+    index++;
+  }
+  return -1;
+}
+
+layer_t LayerGroup::getLayerIndex(const Layer* layer) const
+{
+  layer_t index = 0;
+  return this->getLayerIndex(layer, index);
 }
 
 } // namespace doc

@@ -43,9 +43,8 @@ using namespace filters;
 ToolLoopManager::ToolLoopManager(ToolLoop* toolLoop)
   : m_toolLoop(toolLoop)
   , m_canceled(false)
-  , m_brushSize0(toolLoop->getBrush()->size())
-  , m_brushAngle0(toolLoop->getBrush()->angle())
   , m_dynamics(toolLoop->getDynamics())
+  , m_brush0(toolLoop->getBrush())
 {
 }
 
@@ -272,6 +271,8 @@ void ToolLoopManager::doLoopStep(bool lastStep)
   }
 
   m_toolLoop->validateDstImage(m_dirtyArea);
+  if (!lastStep && m_toolLoop->isSelectionToolLoop())
+    m_toolLoop->clearSelectionToolMask(false);
 
   // Join or fill user points
   if (fillStrokes)
@@ -327,14 +328,26 @@ void ToolLoopManager::calculateDirtyArea(const Strokes& strokes)
     // Expand the dirty-area with the pen width
     Rect r1, r2;
 
-    m_toolLoop->getPointShape()->getModifiedArea(m_toolLoop, strokeBounds.x, strokeBounds.y, r1);
+    m_toolLoop->getPointShape()->getModifiedArea(m_toolLoop,
+                                                 strokeBounds.x,
+                                                 strokeBounds.y,
+                                                 stroke.firstPoint().symmetry,
+                                                 r1);
 
     m_toolLoop->getPointShape()->getModifiedArea(m_toolLoop,
                                                  strokeBounds.x + strokeBounds.w - 1,
                                                  strokeBounds.y + strokeBounds.h - 1,
+                                                 stroke.firstPoint().symmetry,
                                                  r2);
 
     m_dirtyArea.createUnion(m_dirtyArea, Region(r1.createUnion(r2)));
+  }
+
+  // This ensures the Selection Tool Mask doesn't leave a 'trail' behind
+  if (m_toolLoop->isSelectionToolLoop()) {
+    auto bounds = m_dirtyArea.bounds();
+    bounds.enlarge(1);
+    m_dirtyArea |= gfx::Region(bounds);
   }
 
   // Merge new dirty area with the previous one (for tools like line
@@ -357,8 +370,8 @@ Stroke::Pt ToolLoopManager::getSpriteStrokePt(const Pointer& pointer)
 {
   // Convert the screen point to a sprite point
   Stroke::Pt spritePoint = pointer.point();
-  spritePoint.size = m_brushSize0;
-  spritePoint.angle = m_brushAngle0;
+  spritePoint.size = m_brush0->size();
+  spritePoint.angle = m_brush0->angle();
 
   // Center the input to some grid point if needed
   snapToGrid(spritePoint);

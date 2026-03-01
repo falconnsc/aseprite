@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2020-2023  Igara Studio S.A.
+// Copyright (C) 2020-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -23,7 +23,6 @@
 #include "app/ui/timeline/timeline.h"
 #include "app/ui/user_data_view.h"
 #include "app/ui_context.h"
-#include "base/mem_utils.h"
 #include "base/scoped_value.h"
 #include "doc/cel.h"
 #include "doc/cels_range.h"
@@ -94,19 +93,19 @@ public:
     m_timer.stop();
     m_document = doc;
     m_cel = cel;
-    m_range = App::instance()->timeline()->range();
+    m_range = UIContext::instance()->range();
 
     if (m_document)
       m_document->add_observer(this);
 
     if (countCels() > 0) {
       m_userDataView.configureAndSet((m_cel ? m_cel->data()->userData() : UserData()),
-                                     g_window->propertiesGrid());
+                                     propertiesGrid());
     }
     else if (!m_cel)
       m_userDataView.setVisible(false, false);
 
-    g_window->expandWindow(gfx::Size(g_window->bounds().w, g_window->sizeHint().h));
+    expandWindow(gfx::Size(bounds().w, sizeHint().h));
     updateFromCel();
   }
 
@@ -262,7 +261,7 @@ private:
         m_lastValues.text = newUserData.text();
 
         if (redrawTimeline)
-          App::instance()->timeline()->invalidate();
+          App::instance()->timeline()->invalidate(); // TODO avoid this invalidating in tx.commit()
 
         tx.commit();
       }
@@ -281,7 +280,7 @@ private:
   {
     if (countCels() > 0) {
       m_userDataView.toggleVisibility();
-      g_window->expandWindow(gfx::Size(g_window->bounds().w, g_window->sizeHint().h));
+      expandWindow(gfx::Size(bounds().w, sizeHint().h));
     }
   }
 
@@ -345,7 +344,7 @@ private:
         color_t c = m_cel->data()->userData().color();
         m_userDataView.color()->setColor(
           Color::fromRgb(rgba_getr(c), rgba_getg(c), rgba_getb(c), rgba_geta(c)));
-        m_userDataView.entry()->setText(m_cel->data()->userData().text());
+        m_userDataView.textEdit()->setText(m_cel->data()->userData().text());
         // Set last filled values in CelPropertiesWindow
         m_lastValues.opacity = m_cel->opacity();
         m_lastValues.zIndex = m_cel->zIndex();
@@ -370,7 +369,7 @@ private:
   bool m_pendingChanges = false;
   Doc* m_document = nullptr;
   Cel* m_cel = nullptr;
-  DocRange m_range;
+  view::RealRange m_range;
   bool m_selfUpdate = false;
   UserDataView m_userDataView;
   CelPropsLastValues m_lastValues;
@@ -385,14 +384,14 @@ protected:
   void onExecute(Context* context) override;
 };
 
-CelPropertiesCommand::CelPropertiesCommand() : Command(CommandId::CelProperties(), CmdUIOnlyFlag)
+CelPropertiesCommand::CelPropertiesCommand() : Command(CommandId::CelProperties())
 {
 }
 
 bool CelPropertiesCommand::onEnabled(Context* context)
 {
-  return context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
-                             ContextFlags::ActiveLayerIsImage);
+  return context->isUIAvailable() && context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
+                                                         ContextFlags::ActiveLayerIsImage);
 }
 
 void CelPropertiesCommand::onExecute(Context* context)

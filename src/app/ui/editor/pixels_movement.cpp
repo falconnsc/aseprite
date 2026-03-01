@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2026  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -31,7 +31,7 @@
 #include "app/util/cel_ops.h"
 #include "app/util/expand_cel_canvas.h"
 #include "app/util/new_image_from_mask.h"
-#include "app/util/range_utils.h"
+#include "app/util/tiled_mode.h"
 #include "base/pi.h"
 #include "doc/algorithm/flip_image.h"
 #include "doc/algorithm/rotate.h"
@@ -112,7 +112,8 @@ PixelsMovement::PixelsMovement(Context* context,
                                Site site,
                                const Image* moveThis,
                                const Mask* mask,
-                               const char* operationName)
+                               const char* operationName,
+                               const TiledModeHelper* tiledModeHelper)
   : m_reader(context)
   , m_site(site)
   , m_document(site.document())
@@ -123,6 +124,7 @@ PixelsMovement::PixelsMovement(Context* context,
   , m_originalImage(Image::createCopy(moveThis))
   , m_opaque(false)
   , m_maskColor(m_site.sprite()->transparentColor())
+  , m_tiledModeHelper(tiledModeHelper)
   , m_canHandleFrameChange(false)
   , m_fastMode(false)
   , m_needsRotSpriteRedraw(false)
@@ -131,9 +133,9 @@ PixelsMovement::PixelsMovement(Context* context,
   // TODO: enable TilemapMode exchanges during PixelMovement.
   if (m_site.layer()->isTilemap() && ColorBar::instance())
     ColorBar::instance()->lockTilemapMode();
-  double cornerThick = (m_site.tilemapMode() == TilemapMode::Tiles) ?
-                         CORNER_THICK_FOR_TILEMAP_MODE :
-                         CORNER_THICK_FOR_PIXELS_MODE;
+  const float cornerThick = (m_site.tilemapMode() == TilemapMode::Tiles ?
+                               CORNER_THICK_FOR_TILEMAP_MODE :
+                               CORNER_THICK_FOR_PIXELS_MODE);
   Transformation transform(mask->bounds(), cornerThick);
   set_pivot_from_preferences(transform);
 
@@ -179,7 +181,7 @@ bool PixelsMovement::editMultipleCels() const
 {
   return (m_site.range().enabled() &&
           (Preferences::instance().selection.multicelWhenLayersOrFrames() ||
-           m_site.range().type() == DocRange::kCels));
+           m_site.range().type() == view::Range::kCels));
 }
 
 void PixelsMovement::setDelegate(PixelsMovementDelegate* delegate)
@@ -281,6 +283,12 @@ void PixelsMovement::setTransformationBase(const Transformation& t)
     fullBounds |= gfx::Rect((int)newCorners[i].x, (int)newCorners[i].y, 1, 1);
   }
 
+  if (m_tiledModeHelper && m_tiledModeHelper->hasModeFlag(TiledMode::X_AXIS)) {
+    fullBounds.enlargeXW(m_document->sprite()->width());
+  }
+  if (m_tiledModeHelper && m_tiledModeHelper->hasModeFlag(TiledMode::Y_AXIS)) {
+    fullBounds.enlargeYH(m_document->sprite()->height());
+  }
   // This align is done to properly invalidate regions on the editor when
   // partial tiles are selected in the transform bounds
   if (m_site.tilemapMode() == TilemapMode::Tiles)
@@ -421,10 +429,12 @@ void PixelsMovement::moveImage(const gfx::PointF& pos, MoveModifier moveModifier
         // Now we calculate the difference from x1,y1 point and we can
         // use it to adjust all coordinates (x1, y1, x2, y2).
         bounds.setOrigin(gridOffset);
+        newTransformation.pivot(abs_initial_pivot - m_initialData.bounds().origin() + gridOffset);
       }
+      else
+        newTransformation.pivot(abs_initial_pivot + gfx::PointF(dx, dy));
 
       newTransformation.bounds(bounds);
-      newTransformation.pivot(abs_initial_pivot + gfx::PointF(dx, dy));
       break;
     }
 
@@ -1119,7 +1129,22 @@ void PixelsMovement::redrawExtraImage(Transformation* transformation)
   if (!m_extraCel)
     m_extraCel.reset(new ExtraCel);
 
-  gfx::Rect bounds = transformation->transformedBounds();
+  gfx::Rect bounds;
+  if (m_tiledModeHelper && m_tiledModeHelper->tiledEnabled()) {
+    m_tiledModeHelper->wrapTransformation(transformation);
+    // Enlarge the wrapped transformed bounds to make room for the copies
+    // of the chunk of pixels that will be drawn later on the extra cel.
+    bounds = transformation->transformedBounds();
+    if (m_tiledModeHelper->hasModeFlag(TiledMode::X_AXIS)) {
+      bounds.enlargeXW(m_document->sprite()->width());
+    }
+    if (m_tiledModeHelper->hasModeFlag(TiledMode::Y_AXIS)) {
+      bounds.enlargeYH(m_document->sprite()->height());
+    }
+  }
+  else {
+    bounds = transformation->transformedBounds();
+  }
 
   if (!bounds.isEmpty()) {
     gfx::Size extraCelSize;
@@ -1171,6 +1196,14 @@ void PixelsMovement::drawImage(const Transformation& transformation,
 
   auto corners = transformation.transformedCorners();
   gfx::Rect bounds = corners.bounds(transformation.cornerThick());
+  const gfx::Rect cornerBounds = bounds;
+
+  if (m_tiledModeHelper && m_tiledModeHelper->hasModeFlag(TiledMode::X_AXIS)) {
+    bounds.enlargeXW(m_document->sprite()->width());
+  }
+  if (m_tiledModeHelper && m_tiledModeHelper->hasModeFlag(TiledMode::Y_AXIS)) {
+    bounds.enlargeYH(m_document->sprite()->height());
+  }
 
   if (m_site.tilemapMode() == TilemapMode::Tiles && m_site.layer()->isTilemap()) {
     dst->setMaskColor(doc::notile);
@@ -1211,6 +1244,10 @@ void PixelsMovement::drawImage(const Transformation& transformation,
     m_originalImage->setMaskColor(maskColor);
 
     drawParallelogram(transformation, dst, m_originalImage.get(), m_initialMask.get(), corners, pt);
+
+    if (m_tiledModeHelper && m_tiledModeHelper->tiledEnabled()) {
+      m_tiledModeHelper->drawTiled(dst, cornerBounds);
+    }
   }
 }
 
@@ -1417,7 +1454,7 @@ CelList PixelsMovement::getEditableCels()
   CelList cels;
 
   if (editMultipleCels()) {
-    cels = get_unique_cels_to_edit_pixels(m_site.sprite(), m_site.range());
+    cels = m_site.selectedUniqueCelsToEditPixels();
   }
   else {
     // TODO This case is used in paste too, where the cel() can be

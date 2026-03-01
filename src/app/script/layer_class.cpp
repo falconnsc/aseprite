@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2018  David Capello
 //
 // This program is distributed under the terms of
@@ -10,17 +10,20 @@
 #endif
 
 #include "app/cmd/set_layer_blend_mode.h"
+#include "app/cmd/set_layer_flags.h"
 #include "app/cmd/set_layer_name.h"
 #include "app/cmd/set_layer_opacity.h"
 #include "app/cmd/set_layer_tileset.h"
 #include "app/doc.h"
 #include "app/doc_api.h"
+#include "app/pref/preferences.h"
 #include "app/script/blend_mode.h"
 #include "app/script/docobj.h"
 #include "app/script/engine.h"
 #include "app/script/luacpp.h"
 #include "app/script/userdata.h"
 #include "app/tx.h"
+#include "app/ui/timeline/timeline.h"
 #include "doc/layer.h"
 #include "doc/layer_tilemap.h"
 #include "doc/sprite.h"
@@ -32,6 +35,32 @@ namespace app { namespace script {
 using namespace doc;
 
 namespace {
+
+// Returns false if we are outside a transaction, so you have to
+// change the flag manually.
+bool set_layer_flags_with_undo(Layer* layer, const bool enableFlag, const LayerFlags flag)
+{
+  ASSERT(layer->sprite());
+  Doc* doc = static_cast<Doc*>(layer->sprite()->document());
+  ASSERT(doc);
+
+  // With undo when we are inside a transaction
+  if (doc->transaction()) {
+    Tx tx(doc);
+    LayerFlags newFlags = layer->flags();
+    if (enableFlag)
+      newFlags |= flag;
+    else
+      newFlags &= ~flag;
+
+    tx(new cmd::SetLayerFlags(layer, newFlags));
+    tx.commit();
+    return true;
+  }
+
+  // Without undo
+  return false;
+}
 
 int Layer_eq(lua_State* L)
 {
@@ -129,7 +158,8 @@ int Layer_get_name(lua_State* L)
 int Layer_get_opacity(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
-  if (layer->isImage()) {
+  if (layer->isImage() ||
+      (layer->isGroup() && app::Preferences::instance().experimental.composeGroups())) {
     lua_pushinteger(L, static_cast<LayerImage*>(layer)->opacity());
     return 1;
   }
@@ -140,7 +170,8 @@ int Layer_get_opacity(lua_State* L)
 int Layer_get_blendMode(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
-  if (layer->isImage()) {
+  if (layer->isImage() ||
+      (layer->isGroup() && app::Preferences::instance().experimental.composeGroups())) {
     lua_pushinteger(
       L,
       int(base::convert_to<app::script::BlendMode>(static_cast<LayerImage*>(layer)->blendMode())));
@@ -244,6 +275,13 @@ int Layer_get_tileset(lua_State* L)
   return 1;
 }
 
+int Layer_get_uuid(lua_State* L)
+{
+  auto* layer = get_docobj<Layer>(L, 1);
+  push_obj(L, layer->uuid());
+  return 1;
+}
+
 int Layer_set_name(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
@@ -260,7 +298,7 @@ int Layer_set_opacity(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
   const int opacity = lua_tointeger(L, 2);
-  if (layer->isImage()) {
+  if (layer->isImage() || layer->isGroup()) {
     Tx tx(layer->sprite());
     tx(new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), opacity));
     tx.commit();
@@ -272,7 +310,7 @@ int Layer_set_blendMode(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
   auto blendMode = app::script::BlendMode(lua_tointeger(L, 2));
-  if (layer->isImage()) {
+  if (layer->isImage() || layer->isGroup()) {
     Tx tx(layer->sprite());
     tx(new cmd::SetLayerBlendMode(static_cast<LayerImage*>(layer),
                                   base::convert_to<doc::BlendMode>(blendMode)));
@@ -321,7 +359,11 @@ int Layer_set_stackIndex(lua_State* L)
 int Layer_set_isEditable(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
-  layer->setEditable(lua_toboolean(L, 2));
+  const bool newState = lua_toboolean(L, 2);
+
+  if (!set_layer_flags_with_undo(layer, newState, LayerFlags::Editable))
+    layer->setEditable(newState);
+
   return 0;
 }
 
@@ -329,29 +371,53 @@ int Layer_set_isVisible(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
   const bool newState = lua_toboolean(L, 2);
-  Doc* doc = static_cast<Doc*>(layer->sprite()->document());
-  doc->setLayerVisibilityWithNotifications(layer, newState);
+
+  if (!set_layer_flags_with_undo(layer, newState, LayerFlags::Visible)) {
+    Doc* doc = static_cast<Doc*>(layer->sprite()->document());
+    doc->setLayerVisibilityWithNotifications(layer, newState);
+  }
+
   return 0;
 }
 
 int Layer_set_isContinuous(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
-  layer->setContinuous(lua_toboolean(L, 2));
+  const bool newState = lua_toboolean(L, 2);
+
+  if (!set_layer_flags_with_undo(layer, newState, LayerFlags::Continuous))
+    layer->setContinuous(newState);
+
   return 0;
 }
 
 int Layer_set_isCollapsed(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
-  layer->setCollapsed(lua_toboolean(L, 2));
+  const bool newState = lua_toboolean(L, 2);
+
+  if (!set_layer_flags_with_undo(layer, newState, LayerFlags::Collapsed))
+    layer->setCollapsed(newState);
+
+  // TODO the timeline should be listening this kind of changes
+  if (auto* timeline = App::instance()->timeline())
+    timeline->refresh();
+
   return 0;
 }
 
 int Layer_set_isExpanded(lua_State* L)
 {
   auto layer = get_docobj<Layer>(L, 1);
-  layer->setCollapsed(!lua_toboolean(L, 2));
+  const bool newState = !lua_toboolean(L, 2);
+
+  if (!set_layer_flags_with_undo(layer, newState, LayerFlags::Collapsed))
+    layer->setCollapsed(newState);
+
+  // TODO the timeline should be listening this kind of changes
+  if (auto* timeline = App::instance()->timeline())
+    timeline->refresh();
+
   return 0;
 }
 
@@ -443,6 +509,7 @@ const Property Layer_properties[] = {
   { "data",          UserData_get_text<Layer>,       UserData_set_text<Layer>       },
   { "properties",    UserData_get_properties<Layer>, UserData_set_properties<Layer> },
   { "tileset",       Layer_get_tileset,              Layer_set_tileset              },
+  { "uuid",          Layer_get_uuid,                 nullptr                        },
   { nullptr,         nullptr,                        nullptr                        }
 };
 

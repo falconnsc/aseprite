@@ -21,7 +21,7 @@
 #include "base/fs.h"
 #include "doc/cel.h"
 #include "doc/color.h"
-#include "doc/image_impl.h"
+#include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
 #include "fmt/format.h"
@@ -58,7 +58,7 @@ protected:
 };
 
 ScreenshotCommand::ScreenshotCommand()
-  : CommandWithNewParams<ScreenshotParams>(CommandId::Screenshot(), CmdUIOnlyFlag)
+  : CommandWithNewParams<ScreenshotParams>(CommandId::Screenshot())
 {
 }
 

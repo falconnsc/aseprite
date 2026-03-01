@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -9,10 +9,9 @@
   #include "config.h"
 #endif
 
+#include "doc/image.h"
 #include "doc/mask.h"
-
-#include "base/memory.h"
-#include "doc/image_impl.h"
+#include "gfx/point.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -47,24 +46,16 @@ void for_each_mask_pixel(Mask& a, const Mask& b, Func f)
 
 Mask::Mask() : Object(ObjectType::Mask)
 {
-  initialize();
 }
 
 Mask::Mask(const Mask& mask) : Object(mask)
 {
-  initialize();
   copyFrom(&mask);
 }
 
 Mask::~Mask()
 {
-  ASSERT(m_freeze_count == 0);
-}
-
-void Mask::initialize()
-{
-  m_freeze_count = 0;
-  m_bounds = gfx::Rect(0, 0, 0, 0);
+  ASSERT(m_freezes == 0);
 }
 
 int Mask::getMemSize() const
@@ -79,17 +70,17 @@ void Mask::setName(const char* name)
 
 void Mask::freeze()
 {
-  ASSERT(m_freeze_count >= 0);
-  m_freeze_count++;
+  ASSERT(m_freezes >= 0);
+  m_freezes++;
 }
 
 void Mask::unfreeze()
 {
-  ASSERT(m_freeze_count > 0);
-  m_freeze_count--;
+  ASSERT(m_freezes > 0);
+  m_freezes--;
 
   // Shrink just in case
-  if (m_freeze_count == 0)
+  if (m_freezes == 0)
     shrink();
 }
 
@@ -111,7 +102,7 @@ bool Mask::isRectangular() const
 
 void Mask::copyFrom(const Mask* sourceMask)
 {
-  ASSERT(m_freeze_count == 0);
+  ASSERT(m_freezes == 0);
 
   clear();
   setName(sourceMask->name().c_str());
@@ -124,6 +115,65 @@ void Mask::copyFrom(const Mask* sourceMask)
     // frozen, so add() doesn't created the bitmap)
     if (m_bitmap)
       copy_image(m_bitmap.get(), sourceMask->m_bitmap.get());
+  }
+}
+
+void Mask::fromImage(const Image* image, const gfx::Point& maskOrigin, uint8_t alphaThreshold)
+{
+  if (image) {
+    replace(image->bounds().setOrigin(maskOrigin));
+    freeze();
+    {
+      LockImageBits<BitmapTraits> maskBits(bitmap());
+      auto maskIt = maskBits.begin();
+      auto maskEnd = maskBits.end();
+
+      switch (image->pixelFormat()) {
+        case IMAGE_RGB: {
+          LockImageBits<RgbTraits> rgbBits(image);
+          auto rgbIt = rgbBits.begin();
+#if _DEBUG
+          auto rgbEnd = rgbBits.end();
+#endif
+          for (; maskIt != maskEnd; ++maskIt, ++rgbIt) {
+            ASSERT(rgbIt != rgbEnd);
+            color_t c = *rgbIt;
+            *maskIt = (rgba_geta(c) > alphaThreshold);
+          }
+          break;
+        }
+
+        case IMAGE_GRAYSCALE: {
+          LockImageBits<GrayscaleTraits> grayBits(image);
+          auto grayIt = grayBits.begin();
+#if _DEBUG
+          auto grayEnd = grayBits.end();
+#endif
+          for (; maskIt != maskEnd; ++maskIt, ++grayIt) {
+            ASSERT(grayIt != grayEnd);
+            color_t c = *grayIt;
+            *maskIt = (graya_geta(c) > alphaThreshold);
+          }
+          break;
+        }
+
+        case IMAGE_INDEXED: {
+          const doc::color_t maskColor = image->maskColor();
+          LockImageBits<IndexedTraits> idxBits(image);
+          auto idxIt = idxBits.begin();
+#if _DEBUG
+          auto idxEnd = idxBits.end();
+#endif
+          for (; maskIt != maskEnd; ++maskIt, ++idxIt) {
+            ASSERT(idxIt != idxEnd);
+            color_t c = *idxIt;
+            *maskIt = (c != maskColor);
+          }
+          break;
+        }
+      }
+    }
+    unfreeze();
   }
 }
 
@@ -187,10 +237,10 @@ void Mask::intersect(const doc::Mask& mask)
 
 void Mask::add(const gfx::Rect& bounds)
 {
-  if (m_freeze_count == 0)
+  if (m_freezes == 0)
     reserve(bounds);
 
-  // m_bitmap can be nullptr if we have m_freeze_count > 0
+  // m_bitmap can be nullptr if we have m_freezes > 0
   if (!m_bitmap)
     return;
 
@@ -432,7 +482,7 @@ void Mask::reserve(const gfx::Rect& bounds)
 void Mask::shrink()
 {
   // If the mask is frozen we avoid the shrinking
-  if (m_freeze_count > 0)
+  if (m_freezes > 0)
     return;
 
 #define SHRINK_SIDE(u_begin, u_op, u_final, u_add, v_begin, v_op, v_final, v_add, U, V, var)       \

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -30,6 +30,7 @@
 #include "app/tools/controller.h"
 #include "app/tools/ink.h"
 #include "app/tools/ink_type.h"
+#include "app/tools/intertwine.h"
 #include "app/tools/point_shape.h"
 #include "app/tools/tool.h"
 #include "app/tools/tool_box.h"
@@ -43,6 +44,7 @@
 #include "app/ui/dynamics_popup.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/expr_entry.h"
+#include "app/ui/font_entry.h"
 #include "app/ui/icon_button.h"
 #include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/layer_frame_comboboxes.h"
@@ -346,6 +348,117 @@ protected:
   }
 
   bool m_lock;
+};
+
+class ContextBar::CornerRadiusField : public HBox {
+public:
+  class CornerRadiusButtonItem : public ButtonSet::Item {
+  public:
+    CornerRadiusButtonItem()
+    {
+      auto* theme = SkinTheme::get(this);
+      setIcon(theme->parts.cornerRadiusField());
+      setSelected(Preferences::instance().contextBar.showCornerRadius());
+    }
+
+  protected:
+    CornerRadiusField* field()
+    {
+      return static_cast<CornerRadiusField*>(ButtonSet::Item::parent()->parent());
+    }
+
+    bool onProcessMessage(ui::Message* msg) override
+    {
+      switch (msg->type()) {
+        case ui::kMouseMoveMessage:
+          if (hasCapture()) {
+            MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
+            Manager* mgr = manager();
+            Widget* pick = mgr->pickFromScreenPos(
+              display()->nativeWindow()->pointToScreen(mouseMsg->position()));
+
+            if (pick == &field()->m_radius) {
+              mgr->transferAsMouseDownMessage(this, pick, mouseMsg);
+              return true;
+            }
+          }
+          break;
+      }
+      return ButtonSet::Item::onProcessMessage(msg);
+    }
+  };
+
+  class CornerRadiusButton : public ButtonSet {
+  public:
+    CornerRadiusButton() : ButtonSet(1)
+    {
+      setMultiMode(ButtonSet::MultiMode::Set);
+
+      auto* theme = SkinTheme::get(this);
+      addItem(new CornerRadiusButtonItem, theme->styles.cornerRadiusField());
+    }
+
+  protected:
+    CornerRadiusField* field() { return static_cast<CornerRadiusField*>(ButtonSet::parent()); }
+
+    void onItemChange(ButtonSet::Item* item) override
+    {
+      ButtonSet::onItemChange(item);
+
+      const bool status = item->isSelected();
+      Preferences::instance().contextBar.showCornerRadius(status);
+      if (status) {
+        field()->m_radius.setVisible(true);
+        field()->parent()->layout();
+      }
+      else
+        field()->setValue(0);
+    }
+  };
+
+  class CornerRadiusEntry : public IntEntry {
+  public:
+    CornerRadiusEntry() : IntEntry(0, 32)
+    {
+      setSuffix("px");
+      setPersistSelection(true);
+      setMaxTextLength(4);
+      maxValueUnbounded(true);
+    }
+
+  private:
+    void onValueChange() override
+    {
+      if (g_updatingFromCode)
+        return;
+
+      IntEntry::onValueChange();
+      base::ScopedValue lockFlag(g_updatingFromCode, true);
+
+      Tool* tool = App::instance()->activeTool();
+      Preferences::instance().tool(tool).cornerRadius.setValue(getValue());
+    }
+  };
+
+  CornerRadiusField(TooltipManager* tooltipManager)
+  {
+    addChild(&m_button);
+    addChild(&m_radius);
+
+    tooltipManager->addTooltipFor(m_button.at(0), Strings::context_bar_corner_radius(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_radius, Strings::context_bar_corner_radius(), BOTTOM);
+  }
+
+  void setValue(const int value)
+  {
+    m_radius.setValue(value);
+    m_radius.setVisible(value > 0 || Preferences::instance().contextBar.showCornerRadius());
+    parent()->layout();
+  }
+
+private:
+  CornerRadiusButton m_button;
+  CornerRadiusEntry m_radius;
 };
 
 class ContextBar::ToleranceField : public IntEntry {
@@ -1000,12 +1113,12 @@ public:
     m_angle.setSuffix("°");
     m_skew.setSuffix("°");
 
-    addChild(new Label("P:"));
+    addChild(new Label(Strings::context_bar_position_label()));
     addChild(&m_x);
     addChild(&m_y);
     addChild(&m_w);
     addChild(&m_h);
-    addChild(new Label("R:"));
+    addChild(new Label(Strings::context_bar_rotation_label()));
     addChild(&m_angle);
     addChild(&m_skew);
 
@@ -1044,6 +1157,16 @@ public:
     });
     m_angle.Change.connect([this] { onChangeAngle(); });
     m_skew.Change.connect([this] { onChangeSkew(); });
+  }
+
+  void setupTooltips(TooltipManager* tooltipManager)
+  {
+    tooltipManager->addTooltipFor(&m_x, Strings::context_bar_position_x(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_y, Strings::context_bar_position_y(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_w, Strings::context_bar_size_width(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_h, Strings::context_bar_size_height(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_angle, Strings::context_bar_rotation_angle(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_skew, Strings::context_bar_rotation_skew(), BOTTOM);
   }
 
   void update(const Transformation& t)
@@ -1379,11 +1502,12 @@ public:
 
 class ContextBar::DropPixelsField : public ButtonSet {
 public:
-  DropPixelsField() : ButtonSet(2)
+  DropPixelsField() : ButtonSet(3)
   {
     auto* theme = SkinTheme::get(this);
 
     addItem(theme->parts.dropPixelsOk(), theme->styles.contextBarButton());
+    addItem(theme->parts.dropPixelsDrop(), theme->styles.contextBarButton());
     addItem(theme->parts.dropPixelsCancel(), theme->styles.contextBarButton());
     setOfferCapture(false);
   }
@@ -1391,8 +1515,26 @@ public:
   void setupTooltips(TooltipManager* tooltipManager)
   {
     // TODO Enter and Esc should be configurable keys
-    tooltipManager->addTooltipFor(at(0), Strings::context_bar_drop_pixel(), BOTTOM);
-    tooltipManager->addTooltipFor(at(1), Strings::context_bar_cancel_drag(), BOTTOM);
+
+    tooltipManager->addTooltipFor(
+      at(0),
+      key_tooltip(Strings::context_bar_drop_pixel_and_deselect().c_str(),
+                  CommandId::DeselectMask(),
+                  {},
+                  KeyContext::Transformation),
+      BOTTOM);
+    tooltipManager->addTooltipFor(at(1),
+                                  key_tooltip(Strings::context_bar_drop_pixel().c_str(),
+                                              CommandId::Apply(),
+                                              {},
+                                              KeyContext::Transformation),
+                                  BOTTOM);
+    tooltipManager->addTooltipFor(at(2),
+                                  key_tooltip(Strings::context_bar_cancel_drag().c_str(),
+                                              CommandId::Undo(),
+                                              {},
+                                              KeyContext::Transformation),
+                                  BOTTOM);
   }
 
   obs::signal<void(ContextBarObserver::DropAction)> DropPixels;
@@ -1403,8 +1545,9 @@ protected:
     ButtonSet::onItemChange(item);
 
     switch (selectedItem()) {
-      case 0: DropPixels(ContextBarObserver::DropPixels); break;
-      case 1: DropPixels(ContextBarObserver::CancelDrag); break;
+      case 0: DropPixels(ContextBarObserver::Deselect); break;
+      case 1: DropPixels(ContextBarObserver::DropPixels); break;
+      case 2: DropPixels(ContextBarObserver::CancelDrag); break;
     }
   }
 };
@@ -1501,12 +1644,14 @@ protected:
 
 class ContextBar::SymmetryField : public ButtonSet {
 public:
-  SymmetryField() : ButtonSet(3)
+  SymmetryField() : ButtonSet(5)
   {
     setMultiMode(MultiMode::Set);
-    auto* theme = SkinTheme::get(this);
+    auto theme = SkinTheme::get(this);
     addItem(theme->parts.horizontalSymmetry(), theme->styles.symmetryField());
     addItem(theme->parts.verticalSymmetry(), theme->styles.symmetryField());
+    addItem(theme->parts.rightDiagonalSymmetry(), theme->styles.symmetryField());
+    addItem(theme->parts.leftDiagonalSymmetry(), theme->styles.symmetryField());
     addItem("...", theme->styles.symmetryOptions());
   }
 
@@ -1514,7 +1659,9 @@ public:
   {
     tooltipManager->addTooltipFor(at(0), Strings::symmetry_toggle_horizontal(), BOTTOM);
     tooltipManager->addTooltipFor(at(1), Strings::symmetry_toggle_vertical(), BOTTOM);
-    tooltipManager->addTooltipFor(at(2), Strings::symmetry_show_options(), BOTTOM);
+    tooltipManager->addTooltipFor(at(2), Strings::symmetry_toggle_right_diagonal(), BOTTOM);
+    tooltipManager->addTooltipFor(at(3), Strings::symmetry_toggle_left_diagonal(), BOTTOM);
+    tooltipManager->addTooltipFor(at(4), Strings::symmetry_show_options(), BOTTOM);
   }
 
   void updateWithCurrentDocument()
@@ -1525,10 +1672,10 @@ public:
 
     DocumentPreferences& docPref = Preferences::instance().document(doc);
 
-    at(0)->setSelected(
-      int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::HORIZONTAL) ? true : false);
-    at(1)->setSelected(
-      int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::VERTICAL) ? true : false);
+    at(0)->setSelected(int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::HORIZONTAL));
+    at(1)->setSelected(int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::VERTICAL));
+    at(2)->setSelected(int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::RIGHT_DIAG));
+    at(3)->setSelected(int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::LEFT_DIAG));
   }
 
 private:
@@ -1547,13 +1694,18 @@ private:
       mode |= int(app::gen::SymmetryMode::HORIZONTAL);
     if (at(1)->isSelected())
       mode |= int(app::gen::SymmetryMode::VERTICAL);
+    if (at(2)->isSelected())
+      mode |= int(app::gen::SymmetryMode::RIGHT_DIAG);
+    if (at(3)->isSelected())
+      mode |= int(app::gen::SymmetryMode::LEFT_DIAG);
+
     if (app::gen::SymmetryMode(mode) != docPref.symmetry.mode()) {
       docPref.symmetry.mode(app::gen::SymmetryMode(mode));
       // Redraw symmetry rules
       doc->notifyGeneralUpdate();
     }
-    else if (at(2)->isSelected()) {
-      auto item = at(2);
+    else if (at(4)->isSelected()) {
+      auto* item = at(4);
 
       gfx::Rect bounds = item->bounds();
       item->setSelected(false);
@@ -1602,7 +1754,10 @@ class ContextBar::SliceFields : public HBox {
     SliceFields* m_sliceFields;
 
   public:
-    Combo(SliceFields* sliceFields) : m_sliceFields(sliceFields) {}
+    Combo(SliceFields* sliceFields) : m_sliceFields(sliceFields)
+    {
+      getEntryWidget()->setPlaceholder(Strings::general_search());
+    }
 
   protected:
     void onChange() override
@@ -1642,7 +1797,12 @@ class ContextBar::SliceFields : public HBox {
   };
 
 public:
-  SliceFields() : m_doc(nullptr), m_sel(2), m_combobox(this), m_action(2)
+  SliceFields()
+    : m_doc(nullptr)
+    , m_sel(2)
+    , m_combobox(this)
+    , m_transform(Strings::context_bar_slice_transform())
+    , m_action(2)
   {
     auto* theme = SkinTheme::get(this);
 
@@ -1654,6 +1814,12 @@ public:
     m_combobox.setExpansive(true);
     m_combobox.setMinSize(gfx::Size(256 * guiscale(), 0));
 
+    m_transform.Click.connect([this]() {
+      if (auto* editor = Editor::activeEditor())
+        editor->slicesTransforms(m_transform.isSelected());
+    });
+
+    m_action.setEnabled(false);
     m_action.addItem(theme->parts.iconUserData(), theme->styles.buttonsetItemIconMono());
     m_action.addItem(theme->parts.iconClose(), theme->styles.buttonsetItemIconMono());
     m_action.ItemChange.connect(
@@ -1661,6 +1827,7 @@ public:
 
     addChild(&m_sel);
     addChild(&m_combobox);
+    addChild(&m_transform);
     addChild(&m_action);
 
     m_combobox.setVisible(false);
@@ -1671,6 +1838,7 @@ public:
   {
     tooltipManager->addTooltipFor(m_sel.at(0), Strings::context_bar_select_slices(), BOTTOM);
     tooltipManager->addTooltipFor(m_sel.at(1), Strings::context_bar_deselect_slices(), BOTTOM);
+    tooltipManager->addTooltipFor(&m_transform, Strings::context_bar_slice_transform_tip(), BOTTOM);
     tooltipManager->addTooltipFor(m_action.at(0), Strings::context_bar_slice_props(), BOTTOM);
     tooltipManager->addTooltipFor(m_action.at(1), Strings::context_bar_delete_slice(), BOTTOM);
   }
@@ -1714,6 +1882,13 @@ public:
   void closeComboBox() { m_combobox.closeListBox(); }
 
 private:
+  void onInitTheme(InitThemeEvent& ev) override
+  {
+    HBox::onInitTheme(ev);
+    auto* theme = SkinTheme::get(this);
+    m_transform.setStyle(theme->styles.miniCheckBox());
+  }
+
   void onVisible(bool visible) override
   {
     HBox::onVisible(visible);
@@ -1747,10 +1922,23 @@ private:
     const bool relayout = (visible != m_combobox.isVisible() || visible != m_action.isVisible());
 
     m_combobox.setVisible(visible);
+    m_transform.setVisible(visible);
     m_action.setVisible(visible);
+
+    if (auto* editor = Editor::activeEditor())
+      m_transform.setSelected(editor->slicesTransforms());
+
+    updateState();
 
     if (relayout)
       parent()->layout();
+  }
+
+  void updateState()
+  {
+    if (auto editor = Editor::activeEditor()) {
+      m_action.setEnabled(editor->hasSelectedSlices());
+    }
   }
 
   void onSelAction(const int item)
@@ -1766,6 +1954,7 @@ private:
           editor->clearSlicesSelection();
         break;
     }
+    updateState();
   }
 
   void onSelectSliceFromComboBox()
@@ -1782,6 +1971,7 @@ private:
         editor->selectSlice(slice);
       }
     }
+    updateState();
   }
 
   void onComboBoxEntryChange()
@@ -1816,9 +2006,25 @@ private:
   Doc* m_doc;
   ButtonSet m_sel;
   Combo m_combobox;
+  CheckBox m_transform;
   ButtonSet m_action;
   bool m_changeFromEntry;
   std::string m_filter;
+};
+
+class ContextBar::FontSelector : public FontEntry {
+public:
+  FontSelector(ContextBar* contextBar) : FontEntry(true) // With stroke and fill options
+  {
+    // Load the font from the preferences
+    setInfo(FontInfo::getFromPreferences(), FontEntry::From::Init);
+
+    FontChange.connect([contextBar](const FontInfo& fontInfo, From from) {
+      contextBar->FontChange(fontInfo, from);
+    });
+  }
+
+  ~FontSelector() { info().updatePreferences(); }
 };
 
 ContextBar::ContextBar(TooltipManager* tooltipManager, ColorBar* colorBar)
@@ -1852,6 +2058,8 @@ ContextBar::ContextBar(TooltipManager* tooltipManager, ColorBar* colorBar)
   m_ditheringSelector->setUseCustomWidget(false); // Disable custom widget because the context bar
                                                   // is too small
 
+  addChild(m_cornerRadius = new CornerRadiusField(tooltipManager));
+
   addChild(m_inkType = new InkTypeField(this));
   addChild(m_inkOpacityLabel = new Label(Strings::general_opacity()));
   addChild(m_inkOpacity = new InkOpacityField());
@@ -1876,6 +2084,7 @@ ContextBar::ContextBar(TooltipManager* tooltipManager, ColorBar* colorBar)
   m_symmetry->setVisible(pref.symmetryMode.enabled());
 
   addChild(m_sliceFields = new SliceFields);
+  addChild(m_fontSelector = new FontSelector(this));
 
   setupTooltips(tooltipManager);
 
@@ -1912,6 +2121,12 @@ void ContextBar::onInitTheme(ui::InitThemeEvent& ev)
   auto theme = SkinTheme::get(this);
   gfx::Border border = this->border();
   border.bottom(2 * guiscale());
+
+  // Docked at the left side
+  // TODO improve this how this is calculated
+  if (bounds().x == 0)
+    border.left(border.left() + 2 * guiscale());
+
   setBorder(border);
   setBgColor(theme->colors.workspace());
   m_sprayLabel->setStyle(theme->styles.miniLabel());
@@ -1986,6 +2201,11 @@ void ContextBar::onBrushSizeChange()
     discardActiveBrush();
 
   updateForActiveTool();
+}
+
+void ContextBar::onCornerRadiusChange(int value)
+{
+  m_cornerRadius->setValue(value);
 }
 
 void ContextBar::onBrushAngleChange()
@@ -2078,6 +2298,9 @@ void ContextBar::updateForTool(tools::Tool* tool)
     m_freehandAlgoConn = toolPref->freehandAlgorithm.AfterChange.connect(
       [this] { onToolSetFreehandAlgorithm(); });
     m_contiguousConn = toolPref->contiguous.AfterChange.connect([this] { onToolSetContiguous(); });
+    m_cornerRadius->setValue(toolPref->cornerRadius());
+    m_cornerRadiusConn = toolPref->cornerRadius.AfterChange.connect(
+      [this](const int value) { onCornerRadiusChange(value); });
   }
 
   if (tool)
@@ -2148,9 +2371,16 @@ void ContextBar::updateForTool(tools::Tool* tool)
   // True if the current tool is slice tool.
   const bool isSlice = tool && (tool->getInk(0)->isSlice() || tool->getInk(1)->isSlice());
 
+  // True if the current tool is text tool.
+  const bool isText = tool && (tool->getInk(0)->isText() || tool->getInk(1)->isText());
+
   // True if the current tool is floodfill
   const bool isFloodfill = tool && (tool->getPointShape(0)->isFloodFill() ||
                                     tool->getPointShape(1)->isFloodFill());
+
+  const bool hasCornerRadius = tool && !isText && !isSlice &&
+                               (tool->getIntertwine(0)->cornerRadiusSupport() ||
+                                tool->getIntertwine(1)->cornerRadiusSupport());
 
   // True if the current tool needs tolerance options
   const bool hasTolerance = tool && (tool->getPointShape(0)->isFloodFill() ||
@@ -2187,6 +2417,7 @@ void ContextBar::updateForTool(tools::Tool* tool)
   m_brushSize->setVisible(supportOpacity && !isFloodfill && !hasImageBrush);
   m_brushAngle->setVisible(supportOpacity && !isFloodfill && !hasImageBrush && hasBrushWithAngle);
   m_brushPatternField->setVisible(supportOpacity && hasImageBrush && !withDithering);
+  m_cornerRadius->setVisible(hasCornerRadius);
   m_inkType->setVisible(hasInk);
   m_inkOpacityLabel->setVisible(showOpacity);
   m_inkOpacity->setVisible(showOpacity);
@@ -2220,6 +2451,8 @@ void ContextBar::updateForTool(tools::Tool* tool)
   m_sliceFields->setVisible(isSlice);
   if (isSlice)
     updateSliceFields(UIContext::instance()->activeSite());
+
+  m_fontSelector->setVisible(isText);
 
   // Update ink shades with the current selected palette entries
   if (updateShade)
@@ -2321,7 +2554,6 @@ void ContextBar::setActiveBrushBySlot(tools::Tool* tool, int slot)
         // the slot.
         if (brush.hasFlag(BrushSlot::Flags::ImageColor))
           brush.brush()->resetImageColors();
-
         setActiveBrush(brush.brush());
       }
       else {
@@ -2500,6 +2732,16 @@ void ContextBar::setInkType(tools::InkType type)
   m_inkType->setInkType(type);
 }
 
+FontInfo ContextBar::fontInfo() const
+{
+  return m_fontSelector->info();
+}
+
+FontEntry* ContextBar::fontEntry()
+{
+  return m_fontSelector;
+}
+
 render::DitheringMatrix ContextBar::ditheringMatrix()
 {
   return m_ditheringSelector->ditheringMatrix();
@@ -2562,6 +2804,7 @@ void ContextBar::setupTooltips(TooltipManager* tooltipManager)
   m_dropPixels->setupTooltips(tooltipManager);
   m_symmetry->setupTooltips(tooltipManager);
   m_sliceFields->setupTooltips(tooltipManager);
+  m_transformation->setupTooltips(tooltipManager);
 }
 
 void ContextBar::registerCommands()

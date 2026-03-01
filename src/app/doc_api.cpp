@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -14,6 +14,7 @@
 #include "app/cmd/add_cel.h"
 #include "app/cmd/add_frame.h"
 #include "app/cmd/add_layer.h"
+#include "app/cmd/add_tileset.h"
 #include "app/cmd/clear_cel.h"
 #include "app/cmd/clear_image.h"
 #include "app/cmd/copy_cel.h"
@@ -48,9 +49,11 @@
 #include "app/snap_to_grid.h"
 #include "app/transaction.h"
 #include "app/util/autocrop.h"
+#include "app/util/layer_utils.h"
 #include "doc/algorithm/flip_image.h"
 #include "doc/algorithm/shrink_bounds.h"
 #include "doc/cel.h"
+#include "doc/layer_tilemap.h"
 #include "doc/mask.h"
 #include "doc/palette.h"
 #include "doc/slice.h"
@@ -604,6 +607,18 @@ LayerImage* DocApi::newLayer(LayerGroup* parent, const std::string& name)
   return newLayer;
 }
 
+LayerImage* DocApi::newLayerAfter(LayerGroup* parent, const std::string& name, Layer* afterThis)
+{
+  LayerImage* newLayer = new LayerImage(parent->sprite());
+  newLayer->setName(name);
+
+  if (!afterThis)
+    afterThis = parent->lastLayer();
+
+  addLayer(parent, newLayer, afterThis);
+  return newLayer;
+}
+
 LayerGroup* DocApi::newGroup(LayerGroup* parent, const std::string& name)
 {
   LayerGroup* newLayerGroup = new LayerGroup(parent->sprite());
@@ -611,6 +626,33 @@ LayerGroup* DocApi::newGroup(LayerGroup* parent, const std::string& name)
 
   addLayer(parent, newLayerGroup, parent->lastLayer());
   return newLayerGroup;
+}
+
+LayerGroup* DocApi::newGroupAfter(LayerGroup* parent, const std::string& name, Layer* afterThis)
+{
+  LayerGroup* newLayerGroup = new LayerGroup(parent->sprite());
+  newLayerGroup->setName(name);
+
+  if (!afterThis)
+    afterThis = parent->lastLayer();
+
+  addLayer(parent, newLayerGroup, afterThis);
+  return newLayerGroup;
+}
+
+LayerTilemap* DocApi::newTilemapAfter(LayerGroup* parent,
+                                      const std::string& name,
+                                      tileset_index tsi,
+                                      Layer* afterThis)
+{
+  LayerTilemap* newTilemap = new LayerTilemap(parent->sprite(), tsi);
+  newTilemap->setName(name);
+
+  if (!afterThis)
+    afterThis = parent->lastLayer();
+
+  addLayer(parent, newTilemap, afterThis);
+  return newTilemap;
 }
 
 void DocApi::addLayer(LayerGroup* parent, Layer* newLayer, Layer* afterThis)
@@ -651,37 +693,61 @@ void DocApi::restackLayerBefore(Layer* layer, LayerGroup* parent, Layer* beforeT
   restackLayerAfter(layer, parent, afterThis);
 }
 
-Layer* DocApi::duplicateLayerAfter(Layer* sourceLayer, LayerGroup* parent, Layer* afterLayer)
+Layer* DocApi::copyLayerWithSprite(doc::Layer* layer, doc::Sprite* sprite)
 {
-  ASSERT(parent);
-  std::unique_ptr<Layer> newLayerPtr;
+  std::unique_ptr<doc::Layer> clone;
+  if (layer->isTilemap()) {
+    auto* srcTilemap = static_cast<LayerTilemap*>(layer);
+    tileset_index tilesetIndex = srcTilemap->tilesetIndex();
+    // If the caller is trying to make a copy of a tilemap layer specifying a
+    // different sprite as its owner, then we must copy the tilesets of the
+    // given tilemap layer into the new owner.
+    if (sprite != srcTilemap->sprite()) {
+      auto* srcTilesetCopy = Tileset::MakeCopyCopyingImagesForSprite(srcTilemap->tileset(), sprite);
+      auto* addTileset = new cmd::AddTileset(sprite, srcTilesetCopy);
+      m_transaction.execute(addTileset);
+      tilesetIndex = addTileset->tilesetIndex();
+    }
 
-  if (sourceLayer->isTilemap()) {
-    newLayerPtr.reset(new LayerTilemap(sourceLayer->sprite(),
-                                       static_cast<LayerTilemap*>(sourceLayer)->tilesetIndex()));
+    clone = std::make_unique<LayerTilemap>(sprite, tilesetIndex);
   }
-  else if (sourceLayer->isImage())
-    newLayerPtr.reset(new LayerImage(sourceLayer->sprite()));
-  else if (sourceLayer->isGroup())
-    newLayerPtr.reset(new LayerGroup(sourceLayer->sprite()));
+  else if (layer->isImage())
+    clone = std::make_unique<LayerImage>(sprite);
+  else if (layer->isGroup())
+    clone = std::make_unique<LayerGroup>(sprite);
   else
     throw std::runtime_error("Invalid layer type");
 
-  m_document->copyLayerContent(sourceLayer, m_document, newLayerPtr.get());
+  if (auto* doc = dynamic_cast<app::Doc*>(sprite->document())) {
+    doc->copyLayerContent(layer, doc, clone.get());
+  }
 
-  newLayerPtr->setName(newLayerPtr->name() + " Copy");
-
-  addLayer(parent, newLayerPtr.get(), afterLayer);
-
-  // Release the pointer as it is owned by the sprite now.
-  return newLayerPtr.release();
+  return clone.release();
 }
 
-Layer* DocApi::duplicateLayerBefore(Layer* sourceLayer, LayerGroup* parent, Layer* beforeLayer)
+Layer* DocApi::duplicateLayerAfter(Layer* sourceLayer,
+                                   LayerGroup* parent,
+                                   Layer* afterLayer,
+                                   const std::string& nameSuffix)
+{
+  ASSERT(parent);
+  Layer* newLayerPtr = copyLayerWithSprite(sourceLayer, parent->sprite());
+
+  newLayerPtr->setName(newLayerPtr->name() + nameSuffix);
+
+  addLayer(parent, newLayerPtr, afterLayer);
+
+  return newLayerPtr;
+}
+
+Layer* DocApi::duplicateLayerBefore(Layer* sourceLayer,
+                                    LayerGroup* parent,
+                                    Layer* beforeLayer,
+                                    const std::string& nameSuffix)
 {
   ASSERT(parent);
   Layer* afterThis = (beforeLayer ? beforeLayer->getPreviousBrowsable() : nullptr);
-  Layer* newLayer = duplicateLayerAfter(sourceLayer, parent, afterThis);
+  Layer* newLayer = duplicateLayerAfter(sourceLayer, parent, afterThis, nameSuffix);
   if (newLayer)
     restackLayerBefore(newLayer, parent, beforeLayer);
   return newLayer;

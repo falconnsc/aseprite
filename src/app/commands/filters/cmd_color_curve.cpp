@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -14,7 +14,6 @@
 #include "app/commands/filters/color_curve_editor.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
-#include "app/commands/filters/filter_worker.h"
 #include "app/commands/new_params.h"
 #include "app/context.h"
 #include "app/ini_file.h"
@@ -83,7 +82,7 @@ protected:
 };
 
 ColorCurveCommand::ColorCurveCommand()
-  : CommandWithNewParams<ColorCurveParams>(CommandId::ColorCurve(), CmdRecordableFlag)
+  : CommandWithNewParams<ColorCurveParams>(CommandId::ColorCurve())
 {
 }
 
@@ -132,7 +131,7 @@ void ColorCurveCommand::onExecute(Context* context)
     }
   }
   else {
-    start_filter_worker(&filterMgr);
+    filterMgr.startWorker(false);
   }
 }
 

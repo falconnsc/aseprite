@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (C) 2019-2020  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2017  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -12,6 +12,7 @@
 #include "doc/frame.h"
 #include "doc/keyframes.h"
 #include "doc/with_user_data.h"
+#include "gfx/border.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
 
@@ -41,6 +42,20 @@ public:
   void setBounds(const gfx::Rect& bounds) { m_bounds = bounds; }
   void setCenter(const gfx::Rect& center) { m_center = center; }
   void setPivot(const gfx::Point& pivot) { m_pivot = pivot; }
+  void setBorder(const gfx::Border& border)
+  {
+    m_center.x = border.left();
+    m_center.y = border.top();
+    m_center.w = m_bounds.w - border.width();
+    m_center.h = m_bounds.h - border.height();
+  }
+
+  bool operator==(const SliceKey& other) const
+  {
+    return (m_bounds == other.m_bounds && m_center == other.m_center && m_pivot == other.m_pivot);
+  }
+
+  bool operator!=(const SliceKey& other) const { return !operator==(other); }
 
 private:
   gfx::Rect m_bounds;

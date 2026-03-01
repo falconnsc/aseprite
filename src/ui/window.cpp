@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -119,6 +119,8 @@ Window::Window(Type type, const std::string& text)
   , m_isWantFocus(true)
   , m_isForeground(false)
   , m_isAutoRemap(true)
+  , m_isResizing(false)
+  , m_needsTabletPressure(false)
 {
   setVisible(false);
   setAlign(LEFT | MIDDLE);
@@ -347,11 +349,6 @@ void Window::centerWindow(Display* parentDisplay)
                        displaySize.h / 2 - windowSize.h / 2,
                        windowSize.w,
                        windowSize.h));
-}
-
-void Window::moveWindow(const gfx::Rect& rect)
-{
-  moveWindow(rect, true);
 }
 
 void Window::expandWindow(const gfx::Size& size)
@@ -638,6 +635,12 @@ void Window::onResize(ResizeEvent& ev)
   windowSetPosition(ev.bounds());
   // Fire Resize signal
   Resize(ev);
+
+  // After resizing/positioning a window, we have to update the active
+  // mouse widget, because the mouse might have been above a widget of
+  // this window that now has moved to other place.
+  if (auto* mgr = this->manager())
+    mgr->_updateMouseWidgets();
 }
 
 void Window::onSizeHint(SizeHintEvent& ev)
@@ -657,7 +660,7 @@ void Window::onSizeHint(SizeHintEvent& ev)
 
     for (auto child : children()) {
       if (!child->isDecorative()) {
-        reqSize = child->sizeHint();
+        reqSize = child->sizeHint(ev.fitInSize());
 
         maxSize.w = std::max(maxSize.w, reqSize.w);
         maxSize.h = std::max(maxSize.h, reqSize.h);
@@ -885,21 +888,20 @@ void Window::moveWindow(const gfx::Rect& rect, bool use_blit)
 
     // Move the window's graphics
     Display* display = this->display();
-    ScreenGraphics g(display);
-    hide_mouse_cursor();
+    Graphics g(display);
     {
       IntersectClip clip(&g, man_pos);
       if (clip) {
         ui::move_region(display, moveableRegion, dx, dy);
       }
     }
-    show_mouse_cursor();
 
     reg1.createSubtraction(reg1, moveableRegion);
     reg1.offset(dx, dy);
     invalidateRegion(reg1);
   }
 
+  // We invalidate the old region of the window.
   manager->invalidateRegion(invalidManagerRegion);
 
   onWindowMovement();

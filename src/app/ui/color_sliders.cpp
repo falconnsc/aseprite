@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -58,9 +58,7 @@ public:
       return;
     }
 
-    // Color space conversion
-    auto convertColor = convert_from_current_to_screen_color_space();
-
+    Paint paint;
     gfx::Color color = gfx::ColorNone;
     int w = std::max(rc.w - 1, 1);
 
@@ -110,7 +108,11 @@ public:
           color = color_utils::color_for_ui(app::Color::fromGray(255 * x / w));
           break;
       }
-      g->drawVLine(convertColor(color), rc.x + x, rc.y, rc.h);
+
+      // Color space conversion
+      paint.color(color, get_current_color_space(slider->display()).get());
+
+      g->drawVLine(rc.x + x, rc.y, rc.h, paint);
     }
   }
 
@@ -391,7 +393,8 @@ void ColorSliders::addSlider(const Channel channel,
   gfx::Size sz(std::numeric_limits<int>::max(), theme->dimensions.colorSliderHeight());
   item.label->setMaxSize(sz);
   item.box->setMaxSize(sz);
-  item.entry->setMaxSize(sz);
+  // Don't limit the entry size as it will be too small for UI Scaling=200%
+  // item.entry->setMaxSize(sz);
 
   m_grid.addChildInCell(item.label, 1, 1, LEFT | MIDDLE);
   m_grid.addChildInCell(item.box, 1, 1, HORIZONTAL | VERTICAL);

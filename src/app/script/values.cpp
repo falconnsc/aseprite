@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,12 +8,12 @@
   #include "config.h"
 #endif
 
-#include "app/script/values.h"
-
 #include "app/pref/preferences.h"
 #include "app/script/docobj.h"
 #include "app/script/engine.h"
 #include "app/script/luacpp.h"
+#include "app/script/values.h"
+#include "app/site.h"
 #include "app/tools/dynamics.h"
 #include "doc/frame.h"
 #include "doc/layer.h"
@@ -34,7 +34,6 @@ namespace app { namespace script {
 template<>
 void push_value_to_lua(lua_State* L, const std::nullptr_t&)
 {
-  TRACEARGS("push_value_to_lua nullptr_t");
   lua_pushnil(L);
 }
 
@@ -369,6 +368,7 @@ FOR_ENUM(app::TilesetMode)
 FOR_ENUM(app::gen::BgType)
 FOR_ENUM(app::gen::BrushPreview)
 FOR_ENUM(app::gen::BrushType)
+FOR_ENUM(app::gen::CelContentFormat)
 FOR_ENUM(app::gen::ColorProfileBehavior)
 FOR_ENUM(app::gen::Downsampling)
 FOR_ENUM(app::gen::EyedropperChannel)

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018  Igara Studio S.A.
+// Copyright (C) 2018-2024  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -15,10 +15,8 @@
 #include "app/context.h"
 #include "app/doc.h"
 #include "app/i18n/strings.h"
-#include "app/modules/gui.h"
 #include "app/pref/preferences.h"
 #include "app/ui/context_bar.h"
-#include "app/ui_context.h"
 
 namespace app {
 
@@ -37,7 +35,7 @@ private:
   app::gen::SymmetryMode m_mode = app::gen::SymmetryMode::NONE;
 };
 
-SymmetryModeCommand::SymmetryModeCommand() : Command(CommandId::SymmetryMode(), CmdUIOnlyFlag)
+SymmetryModeCommand::SymmetryModeCommand() : Command(CommandId::SymmetryMode())
 {
 }
 
@@ -46,6 +44,8 @@ std::string SymmetryModeCommand::onGetFriendlyName() const
   switch (m_mode) {
     case app::gen::SymmetryMode::HORIZONTAL: return Strings::symmetry_toggle_horizontal();
     case app::gen::SymmetryMode::VERTICAL:   return Strings::symmetry_toggle_vertical();
+    case app::gen::SymmetryMode::RIGHT_DIAG: return Strings::symmetry_toggle_right_diagonal();
+    case app::gen::SymmetryMode::LEFT_DIAG:  return Strings::symmetry_toggle_left_diagonal();
     default:                                 return Strings::symmetry_toggle();
   }
 }
@@ -57,6 +57,10 @@ void SymmetryModeCommand::onLoadParams(const Params& params)
     m_mode = app::gen::SymmetryMode::VERTICAL;
   else if (mode == "horizontal")
     m_mode = app::gen::SymmetryMode::HORIZONTAL;
+  else if (mode == "right_diagonal")
+    m_mode = app::gen::SymmetryMode::RIGHT_DIAG;
+  else if (mode == "left_diagonal")
+    m_mode = app::gen::SymmetryMode::LEFT_DIAG;
   else
     m_mode = app::gen::SymmetryMode::NONE;
 }
@@ -114,7 +118,8 @@ void SymmetryModeCommand::onExecute(Context* ctx)
     // TODO Same with context bar, in the future the context bar could
     //      be listening the DocPref changes to be automatically
     //      invalidated (like it already does with symmetryMode.enabled)
-    App::instance()->contextBar()->updateForActiveTool();
+    if (App::instance()->contextBar())
+      App::instance()->contextBar()->updateForActiveTool();
   }
 }
 

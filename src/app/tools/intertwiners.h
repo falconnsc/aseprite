@@ -1,12 +1,24 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
 
+#include "app/tools/controller.h"
+#include "app/tools/intertwine.h"
+#include "app/tools/point_shape.h"
+#include "app/tools/tool_loop.h"
+#include "app/tools/tool_loop_modifiers.h"
 #include "base/pi.h"
+#include "doc/algo.h"
+#include "doc/algorithm/polygon.h"
 #include "doc/layer_tilemap.h"
+#include "gfx/point.h"
+
+#include <algorithm>
+
+using namespace gfx;
 
 namespace app { namespace tools {
 
@@ -74,12 +86,6 @@ public:
 };
 
 class IntertwineAsLines : public Intertwine {
-  // It was introduced to know if joinStroke function
-  // was executed inmediatelly after a "Last" trace policy (i.e. after the
-  // user confirms a line draw while he is holding down the SHIFT key), so
-  // we have to ignore printing the first pixel of the line.
-  bool m_retainedTracePolicyLast = false;
-
   // In freehand-like tools, on each mouse movement we draw only the
   // line between the last two mouse points in the stroke (the
   // complete stroke is not re-painted again), so we want to indicate
@@ -90,22 +96,10 @@ class IntertwineAsLines : public Intertwine {
 public:
   bool snapByAngle() override { return true; }
 
-  void prepareIntertwine(ToolLoop* loop) override
-  {
-    m_retainedTracePolicyLast = false;
-    m_firstStroke = true;
-  }
+  void prepareIntertwine(ToolLoop* loop) override { m_firstStroke = true; }
 
   void joinStroke(ToolLoop* loop, const Stroke& stroke) override
   {
-    // Required for LineFreehand controller in the first stage, when
-    // we are drawing the line and the trace policy is "Last". Each
-    // new joinStroke() is like a fresh start.  Without this fix, the
-    // first stage on LineFreehand will draw a "star" like pattern
-    // with lines from the first point to the last point.
-    if (loop->getTracePolicy() == TracePolicy::Last)
-      m_retainedTracePolicyLast = true;
-
     if (stroke.size() == 0)
       return;
     else if (stroke.size() == 1) {
@@ -129,9 +123,10 @@ public:
       // when we use Shift+click in the Pencil tool to continue the
       // old stroke).
       // TODO useful only in the case when brush size = 1px
-      const int start =
-        (loop->getController()->isFreehand() && (m_retainedTracePolicyLast || !m_firstStroke) ? 1 :
-                                                                                                0);
+      const int start = (loop->getController()->isFreehand() &&
+                             ((loop->getTracePolicy() == TracePolicy::Last) || !m_firstStroke) ?
+                           1 :
+                           0);
 
       for (int c = start; c < pts.size(); ++c)
         doPointshapeStrokePt(pts[c], loop);
@@ -177,6 +172,8 @@ public:
 
 class IntertwineAsRectangles : public Intertwine {
 public:
+  bool cornerRadiusSupport() override { return true; }
+
   void joinStroke(ToolLoop* loop, const Stroke& stroke) override
   {
     if (stroke.size() == 0)
@@ -200,22 +197,62 @@ public:
           std::swap(y1, y2);
 
         const double angle = loop->getController()->getShapeAngle();
+        const int cornerRadius = loop->getController()->getCornerRadius();
         if (ABS(angle) < 0.001) {
-          doPointshapeLineWithoutDynamics(x1, y1, x2, y1, loop);
-          doPointshapeLineWithoutDynamics(x1, y2, x2, y2, loop);
+          int r = 0;
+          if (cornerRadius > 0) {
+            int w = x2 - x1 + 1;
+            int h = y2 - y1 + 1;
+            r = std::min(w, std::min(h, 2 * cornerRadius)) / 2;
+            algo_sliced_circle(x1, y1, x2, y2, r, loop, (AlgoPixel)doPointshapePoint);
+          }
 
-          for (y = y1; y <= y2; y++) {
+          doPointshapeLineWithoutDynamics(x1 + r, y1, x2 - r, y1, loop);
+          doPointshapeLineWithoutDynamics(x1 + r, y2, x2 - r, y2, loop);
+
+          for (y = y1 + r; y <= y2 - r; y++) {
             doPointshapePoint(x1, y, loop);
             doPointshapePoint(x2, y, loop);
           }
         }
         else {
-          Stroke p = rotateRectangle(x1, y1, x2, y2, angle);
-          int n = p.size();
-          for (int i = 0; i + 1 < n; ++i) {
-            doPointshapeLine(p[i], p[i + 1], loop);
+          if (cornerRadius <= 0) {
+            Stroke p = rotateRectangle(x1, y1, x2, y2, angle);
+            int n = p.size();
+            for (int i = 0; i + 1 < n; ++i) {
+              doPointshapeLine(p[i], p[i + 1], loop);
+            }
+            doPointshapeLine(p[n - 1], p[0], loop);
           }
-          doPointshapeLine(p[n - 1], p[0], loop);
+          else {
+            int w = x2 - x1 + 1;
+            int h = y2 - y1 + 1;
+            int r = std::min(w, std::min(h, 2 * cornerRadius)) / 2;
+            Stroke p = rotateRectangle(x1, y1, x2, y2, angle, r);
+            int n = p.size();
+            for (int i = 0; i + 1 < n; i += 3) {
+              doPointshapeLine(p[i], p[i + 1], loop);
+            }
+            const double ang_minus_PI_2 = base::fmod_radians(angle - PI / 2);
+            const double ang_plus_PI_2 = base::fmod_radians(angle + PI / 2);
+            const double ang_plus_PI = base::fmod_radians(angle + PI);
+            algo_arc(p[2].x, p[2].y, ang_minus_PI_2, angle, r, loop, (AlgoPixel)doPointshapePoint);
+            algo_arc(p[5].x, p[5].y, angle, ang_plus_PI_2, r, loop, (AlgoPixel)doPointshapePoint);
+            algo_arc(p[8].x,
+                     p[8].y,
+                     ang_plus_PI_2,
+                     ang_plus_PI,
+                     r,
+                     loop,
+                     (AlgoPixel)doPointshapePoint);
+            algo_arc(p[11].x,
+                     p[11].y,
+                     ang_plus_PI,
+                     ang_minus_PI_2,
+                     r,
+                     loop,
+                     (AlgoPixel)doPointshapePoint);
+          }
         }
       }
     }
@@ -241,14 +278,66 @@ public:
         std::swap(y1, y2);
 
       const double angle = loop->getController()->getShapeAngle();
+      const int cornerRadius = loop->getController()->getCornerRadius();
       if (ABS(angle) < 0.001) {
-        for (y = y1; y <= y2; y++)
+        int r = 0;
+        if (cornerRadius > 0) {
+          int w = x2 - x1 + 1;
+          int h = y2 - y1 + 1;
+          r = std::min(w, std::min(h, 2 * cornerRadius)) / 2;
+          algo_sliced_circlefill(x1, y1, x2, y2, r, loop, (AlgoHLine)doPointshapeHline);
+
+          for (y = y1; y < y1 + r; y++)
+            doPointshapeLineWithoutDynamics(x1 + r, y, x2 - r, y, loop);
+          for (y = y2 - r + 1; y <= y2; y++)
+            doPointshapeLineWithoutDynamics(x1 + r, y, x2 - r, y, loop);
+        }
+
+        for (y = y1 + r; y <= y2 - r; y++)
           doPointshapeLineWithoutDynamics(x1, y, x2, y, loop);
       }
       else {
-        Stroke p = rotateRectangle(x1, y1, x2, y2, angle);
-        auto v = p.toXYInts();
-        doc::algorithm::polygon(v.size() / 2, &v[0], loop, (AlgoHLine)doPointshapeHline);
+        if (cornerRadius <= 0) {
+          Stroke p = rotateRectangle(x1, y1, x2, y2, angle);
+          auto v = p.toXYInts();
+          doc::algorithm::polygon(v.size() / 2, &v[0], loop, (AlgoHLine)doPointshapeHline);
+        }
+        else {
+          int w = x2 - x1 + 1;
+          int h = y2 - y1 + 1;
+          int r = std::min(w, std::min(h, 2 * cornerRadius)) / 2;
+          Stroke p = rotateRectangle(x1, y1, x2, y2, angle, cornerRadius);
+          auto v = p.toXYInts();
+          doc::algorithm::polygon(v.size() / 2, &v[0], loop, (AlgoHLine)doPointshapeHline);
+          algo_sliced_circlefill(p[2].x - r,
+                                 p[2].y - r,
+                                 p[2].x + r,
+                                 p[2].y + r,
+                                 r,
+                                 loop,
+                                 (AlgoHLine)doPointshapeHline);
+          algo_sliced_circlefill(p[5].x - r,
+                                 p[5].y - r,
+                                 p[5].x + r,
+                                 p[5].y + r,
+                                 r,
+                                 loop,
+                                 (AlgoHLine)doPointshapeHline);
+          algo_sliced_circlefill(p[8].x - r,
+                                 p[8].y - r,
+                                 p[8].x + r,
+                                 p[8].y + r,
+                                 r,
+                                 loop,
+                                 (AlgoHLine)doPointshapeHline);
+          algo_sliced_circlefill(p[11].x - r,
+                                 p[11].y - r,
+                                 p[11].x + r,
+                                 p[11].y + r,
+                                 r,
+                                 loop,
+                                 (AlgoHLine)doPointshapeHline);
+        }
       }
     }
   }
@@ -266,6 +355,12 @@ public:
           int y1 = stroke[c].y;
           int x2 = stroke[c + 1].x;
           int y2 = stroke[c + 1].y;
+
+          if (x1 > x2)
+            std::swap(x1, x2);
+          if (y1 > y2)
+            std::swap(y1, y2);
+
           bounds |= rotateRectangle(x1, y1, x2, y2, angle).bounds();
         }
       }
@@ -279,16 +374,70 @@ private:
   {
     int cx = (x1 + x2) / 2;
     int cy = (y1 + y2) / 2;
-    int a = (x2 - x1) / 2;
-    int b = (y2 - y1) / 2;
+    int a = (x2 - x1 + 1) / 2;
+    int b = (y2 - y1 + 1) / 2;
+
+    double s = -std::sin(angle);
+    double c = std::cos(angle);
+
+    int ac = a * c;
+    int bs = b * s;
+    int as = a * s;
+    int bc = b * c;
+
+    Stroke stroke;
+    stroke.addPoint(gfx::Point(cx - ac - bs, cy + as - bc));
+    stroke.addPoint(gfx::Point(cx + ac - bs, cy - as - bc));
+    stroke.addPoint(gfx::Point(cx + ac + bs, cy - as + bc));
+    stroke.addPoint(gfx::Point(cx - ac + bs, cy + as + bc));
+    return stroke;
+  }
+
+  // Returns a stroke with the rotated points of a rectangle making room for a
+  // rounded corner of the specified radius, and with points where the center of
+  // each corner must be.
+  static Stroke rotateRectangle(int x1, int y1, int x2, int y2, double angle, int cornerRadius)
+  {
+    cornerRadius = std::max(cornerRadius, 0);
+
+    int cx = (x1 + x2) / 2;
+    int cy = (y1 + y2) / 2;
+    int a = ((x2 - x1) / 2);
+    int b = ((y2 - y1) / 2);
+    int ai = a - cornerRadius;
+    int bi = b - cornerRadius;
+
     double s = -std::sin(angle);
     double c = std::cos(angle);
 
     Stroke stroke;
-    stroke.addPoint(Point(cx - a * c - b * s, cy + a * s - b * c));
-    stroke.addPoint(Point(cx + a * c - b * s, cy - a * s - b * c));
-    stroke.addPoint(Point(cx + a * c + b * s, cy - a * s + b * c));
-    stroke.addPoint(Point(cx - a * c + b * s, cy + a * s + b * c));
+    // Top segment
+    stroke.addPoint(Point(cx - ai * c - b * s, cy + ai * s - b * c));
+    stroke.addPoint(Point(cx + ai * c - b * s, cy - ai * s - b * c));
+
+    // Center for top-right corner
+    stroke.addPoint(Point(cx + ai * c - bi * s, cy - ai * s - bi * c));
+
+    // Right segment
+    stroke.addPoint(Point(cx + a * c - bi * s, cy - a * s - bi * c));
+    stroke.addPoint(Point(cx + a * c + bi * s, cy - a * s + bi * c));
+
+    // Center for bottom-right corner
+    stroke.addPoint(Point(cx + ai * c + bi * s, cy - ai * s + bi * c));
+
+    // Bottom segment
+    stroke.addPoint(Point(cx + ai * c + b * s, cy - ai * s + b * c));
+    stroke.addPoint(Point(cx - ai * c + b * s, cy + ai * s + b * c));
+
+    // Center for bottom-left corner
+    stroke.addPoint(Point(cx - ai * c + bi * s, cy + ai * s + bi * c));
+
+    // Left segment
+    stroke.addPoint(Point(cx - a * c + bi * s, cy + a * s + bi * c));
+    stroke.addPoint(Point(cx - a * c - bi * s, cy + a * s - bi * c));
+
+    // Center for top-left corner
+    stroke.addPoint(Point(cx - ai * c - bi * s, cy + ai * s - bi * c));
     return stroke;
   }
 };
@@ -372,7 +521,7 @@ public:
     const double angle = loop->getController()->getShapeAngle();
 
     if (ABS(angle) > 0.001) {
-      Point center = bounds.center();
+      gfx::Point center = bounds.center();
       int a = bounds.w / 2.0 + 0.5;
       int b = bounds.h / 2.0 + 0.5;
       double xd = a * a;
@@ -442,11 +591,6 @@ public:
 };
 
 class IntertwineAsPixelPerfect : public Intertwine {
-  // It was introduced to know if joinStroke function
-  // was executed inmediatelly after a "Last" trace policy (i.e. after the
-  // user confirms a line draw while he is holding down the SHIFT key), so
-  // we have to ignore printing the first pixel of the line.
-  bool m_retainedTracePolicyLast = false;
   Stroke m_pts;
   bool m_saveStrokeArea = false;
 
@@ -483,7 +627,6 @@ public:
   void prepareIntertwine(ToolLoop* loop) override
   {
     m_pts.reset();
-    m_retainedTracePolicyLast = false;
     m_grid = m_dstGrid = m_celGrid = loop->getGrid();
     m_restoredRegion.clear();
 
@@ -509,10 +652,8 @@ public:
     // new joinStroke() is like a fresh start.  Without this fix, the
     // first stage on LineFreehand will draw a "star" like pattern
     // with lines from the first point to the last point.
-    if (loop->getTracePolicy() == TracePolicy::Last) {
-      m_retainedTracePolicyLast = true;
+    if (loop->getTracePolicy() == TracePolicy::Last)
       m_pts.reset();
-    }
 
     int thirdFromLastPt = 0, nextPt = 0;
 
@@ -572,14 +713,18 @@ public:
       // a joinStroke pass with a retained "Last" trace policy
       // (i.e. the user confirms draw a line while he is holding
       // the SHIFT key))
-      if (c == 0 && m_retainedTracePolicyLast)
+      if (c == 0 && loop->getTracePolicy() == TracePolicy::Last)
         continue;
 
       // For the last point we need to store the source image content at that
       // point so we can restore it when erasing a point because of
       // pixel-perfect. So we set the following flag to indicate this, and
       // use it in doTransformPoint.
-      m_saveStrokeArea = (c == m_pts.size() - 1);
+      // The previous behavior isn't required for LineFreehand controller and
+      // the trace policy is "Last" (i.e. the user is drawing a line while
+      // he is holding the SHIFT key)
+      m_saveStrokeArea = (loop->getDstImage() &&
+                          ((c == m_pts.size() - 1) && loop->getTracePolicy() != TracePolicy::Last));
       if (m_saveStrokeArea) {
         clearPointshapeStrokePtAreas();
         setLastPtIndex(c);
@@ -627,7 +772,7 @@ private:
   void savePointshapeStrokePtArea(ToolLoop* loop, const tools::Stroke::Pt& pt)
   {
     gfx::Rect r;
-    loop->getPointShape()->getModifiedArea(loop, pt.x, pt.y, r);
+    loop->getPointShape()->getModifiedArea(loop, pt.x, pt.y, pt.symmetry, r);
 
     gfx::Region rgn(r);
     // By wrapping the modified area's position when tiled mode is active, the
@@ -698,7 +843,7 @@ private:
     ASSERT(m_tempTileset);
 
     gfx::Rect r;
-    loop->getPointShape()->getModifiedArea(loop, pt.x, pt.y, r);
+    loop->getPointShape()->getModifiedArea(loop, pt.x, pt.y, pt.symmetry, r);
 
     r.offset(-loop->getCelOrigin());
     auto tilesPts = m_dstGrid.tilesInCanvasRegion(gfx::Region(r));

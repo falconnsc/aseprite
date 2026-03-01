@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -13,10 +13,20 @@
 
 #include "base/scoped_value.h"
 #include "gfx/size.h"
-#include "os/font.h"
+#include "text/font.h"
 #include "ui/display.h"
+#include "ui/fit_bounds.h"
 #include "ui/intern.h"
-#include "ui/ui.h"
+#include "ui/manager.h"
+#include "ui/message.h"
+#include "ui/resize_event.h"
+#include "ui/scale.h"
+#include "ui/scroll_window.h"
+#include "ui/size_hint_event.h"
+#include "ui/system.h"
+#include "ui/theme.h"
+#include "ui/timer.h"
+#include "ui/view.h"
 
 #include <algorithm>
 #include <cctype>
@@ -133,63 +143,6 @@ static void choose_side(gfx::Rect& bounds, const gfx::Rect& workarea, const gfx:
 
   bounds.x = x;
   bounds.y = y;
-}
-
-static void add_scrollbars_if_needed(MenuBoxWindow* window,
-                                     const gfx::Rect& workarea,
-                                     gfx::Rect& bounds)
-{
-  gfx::Rect rc = bounds;
-
-  if (rc.x < workarea.x) {
-    rc.w -= (workarea.x - rc.x);
-    rc.x = workarea.x;
-  }
-  if (rc.x2() > workarea.x2()) {
-    rc.w = workarea.x2() - rc.x;
-  }
-
-  bool vscrollbarsAdded = false;
-  if (rc.y < workarea.y) {
-    rc.h -= (workarea.y - rc.y);
-    rc.y = workarea.y;
-    vscrollbarsAdded = true;
-  }
-  if (rc.y2() > workarea.y2()) {
-    rc.h = workarea.y2() - rc.y;
-    vscrollbarsAdded = true;
-  }
-
-  if (rc == bounds)
-    return;
-
-  MenuBox* menubox = window->menubox();
-  View* view = new View;
-  view->InitTheme.connect([view] { view->noBorderNoChildSpacing(); });
-  view->initTheme();
-
-  if (vscrollbarsAdded) {
-    int barWidth = view->verticalBar()->getBarWidth();
-    ;
-    if (get_multiple_displays())
-      barWidth *= window->display()->scale();
-
-    rc.w += 2 * barWidth;
-    if (rc.x2() > workarea.x2()) {
-      rc.x = workarea.x2() - rc.w;
-      if (rc.x < workarea.x) {
-        rc.x = workarea.x;
-        rc.w = workarea.w;
-      }
-    }
-  }
-
-  // New bounds
-  bounds = rc;
-
-  window->removeChild(menubox);
-  view->attachToView(menubox);
-  window->addChild(view);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -387,7 +340,7 @@ void Menu::showPopup(const gfx::Point& pos, Display* parentDisplay)
                        gfx::Rect& bounds,
                        std::function<gfx::Rect(Widget*)> getWidgetBounds) {
                choose_side(bounds, workarea, gfx::Rect(bounds.x - 1, bounds.y, 1, 1));
-               add_scrollbars_if_needed(&window, workarea, bounds);
+               add_scrollbars(&window, workarea, bounds, AddScrollBarsOption::IfNeeded);
              });
 
   // Set the focus to the new menubox
@@ -424,6 +377,11 @@ Widget* Menu::findItemById(const char* id) const
   return nullptr;
 }
 
+bool Menu::inBar() const
+{
+  return (parent() && parent()->type() == kMenuBarWidget);
+}
+
 void Menu::onPaint(PaintEvent& ev)
 {
   theme()->paintMenu(ev);
@@ -433,40 +391,59 @@ void Menu::onResize(ResizeEvent& ev)
 {
   setBoundsQuietly(ev.bounds());
 
-  Rect cpos = childrenBounds();
-  bool isBar = (parent()->type() == kMenuBarWidget);
+  const Rect bounds = childrenBounds();
+  const bool inBar = this->inBar();
+  Rect cpos = bounds;
 
   for (auto child : children()) {
     Size reqSize = child->sizeHint();
+    cpos.h = reqSize.h;
 
-    if (isBar)
+    if (inBar) {
       cpos.w = reqSize.w;
+      if (cpos.x > bounds.x && cpos.x2() > bounds.x2()) {
+        cpos.x = bounds.x;
+        cpos.y += cpos.h;
+      }
+    }
     else
       cpos.h = reqSize.h;
 
     child->setBounds(cpos);
 
-    if (isBar)
-      cpos.x += cpos.w;
+    if (inBar)
+      cpos.x += cpos.w + childSpacing();
     else
-      cpos.y += cpos.h;
+      cpos.y += cpos.h + childSpacing();
   }
 }
 
 void Menu::onSizeHint(SizeHintEvent& ev)
 {
+  const bool inBar = this->inBar();
+
   Size size(0, 0);
   Size reqSize;
+  int x = 0;
 
   for (auto it = children().begin(), end = children().end(); it != end;) {
     auto next = it;
     ++next;
 
-    reqSize = (*it)->sizeHint();
+    reqSize = (*it)->sizeHint(ev.fitInSize());
 
-    if (parent() && parent()->type() == kMenuBarWidget) {
-      size.w += reqSize.w + ((next != end) ? childSpacing() : 0);
-      size.h = std::max(size.h, reqSize.h);
+    if (inBar) {
+      size.w = reqSize.w;
+
+      if (ev.fitInSize().w > 0 && x > 0 && x + reqSize.w > ev.fitInSize().w) {
+        x = 0;
+        size.h += reqSize.h;
+      }
+      else {
+        size.h = std::max(size.h, reqSize.h);
+      }
+
+      x += size.w + childSpacing();
     }
     else {
       size.w = std::max(size.w, reqSize.w);
@@ -478,7 +455,6 @@ void Menu::onSizeHint(SizeHintEvent& ev)
 
   size.w += border().width();
   size.h += border().height();
-
   ev.setSizeHint(size);
 }
 
@@ -487,6 +463,22 @@ bool MenuBox::onProcessMessage(Message* msg)
   Menu* menu = MenuBox::getMenu();
 
   switch (msg->type()) {
+    case kCloseDisplayMessage:
+      if (menu)
+        menu->closeAll();
+
+      // In case that this event is received when we are inside a
+      // modal loop to show this menu box
+      // (showPopup()/openWindowInForeground()) we redirect this
+      // kCloseDisplayMessage to the main window.
+      if (window()->isForeground()) {
+        auto* closeMsg2 = new Message(kCloseDisplayMessage);
+        closeMsg2->setRecipient(msg->recipient());
+        closeMsg2->setDisplay(msg->display());
+        manager()->enqueueMessage(closeMsg2);
+      }
+      break;
+
     case kMouseMoveMessage: {
       MenuBaseData* base = get_base(this);
       ASSERT(base);
@@ -803,18 +795,7 @@ bool MenuBox::onProcessMessage(Message* msg)
       break;
 
     case kMouseWheelMessage: {
-      View* view = View::getView(this);
-      if (view) {
-        auto mouseMsg = static_cast<MouseMessage*>(msg);
-        gfx::Point scroll = view->viewScroll();
-
-        if (mouseMsg->preciseWheel())
-          scroll += mouseMsg->wheelDelta();
-        else
-          scroll += mouseMsg->wheelDelta() * textHeight() * 3;
-
-        view->setViewScroll(scroll);
-      }
+      View::scrollByMessage(this, msg);
       break;
     }
 
@@ -839,9 +820,14 @@ void MenuBox::onResize(ResizeEvent& ev)
 void MenuBox::onSizeHint(SizeHintEvent& ev)
 {
   Size size(0, 0);
+  Size fitIn = ev.fitInSize();
+  if (fitIn.w > 0)
+    fitIn.w = std::max(1, fitIn.w - border().width());
+  if (fitIn.h > 0)
+    fitIn.h = std::max(1, fitIn.h - border().height());
 
   if (Menu* menu = getMenu())
-    size = menu->sizeHint();
+    size = menu->sizeHint(fitIn);
 
   size.w += border().width();
   size.h += border().height();
@@ -932,7 +918,7 @@ bool MenuItem::onProcessMessage(Message* msg)
               choose_side(bounds, workarea, parentBounds);
             }
 
-            add_scrollbars_if_needed(window, workarea, bounds);
+            add_scrollbars(window, workarea, bounds, AddScrollBarsOption::IfNeeded);
           });
 
         // Setup the highlight of the new menubox
@@ -1374,6 +1360,7 @@ void MenuBox::startFilteringMouseDown()
 {
   if (m_base && !m_base->is_filtering) {
     m_base->is_filtering = true;
+    Manager::getDefault()->addMessageFilter(kCloseDisplayMessage, this);
     Manager::getDefault()->addMessageFilter(kMouseDownMessage, this);
     Manager::getDefault()->addMessageFilter(kDoubleClickMessage, this);
   }
@@ -1383,6 +1370,7 @@ void MenuBox::stopFilteringMouseDown()
 {
   if (m_base && m_base->is_filtering) {
     m_base->is_filtering = false;
+    Manager::getDefault()->removeMessageFilter(kCloseDisplayMessage, this);
     Manager::getDefault()->removeMessageFilter(kMouseDownMessage, this);
     Manager::getDefault()->removeMessageFilter(kDoubleClickMessage, this);
   }

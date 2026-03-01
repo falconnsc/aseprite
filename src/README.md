@@ -41,10 +41,11 @@ because they don't depend on any other component.
   * [dio](dio/) (base, doc, fixmath, flic): Load/save sprites/documents.
   * [filters](filters/) (base, doc, gfx): Effects for images.
   * [render](render/) (base, doc, gfx): Library to render documents.
+  * [view](view/) (base, doc): Abstract timeline/range view/helpers.
 
 ## Level 4
 
-  * [app](app/) (base, doc, dio, filters, fixmath, flic, gfx, pen, render, scripting, os, ui, undo, updater)
+  * [app](app/) (base, doc, dio, filters, fixmath, flic, gfx, pen, render, scripting, os, ui, undo, updater, view)
   * [desktop](desktop/) (base, doc, dio, render): Integration with the desktop (Windows Explorer, Finder, GNOME, KDE, etc.)
 
 ## Level 5
@@ -70,6 +71,10 @@ In Debug mode (`_DEBUG`):
 
 * [`TRACEARGS`](https://github.com/aseprite/laf/blob/f3222bdee2d21556e9da55343e73803c730ecd97/base/debug.h#L40):
   in debug mode, it prints in the terminal/console each given argument
+
+In release mode you can use a similar function:
+
+* `PRINTARGS` prints in the terminal/console each given argument
 
 # Detect Platform
 

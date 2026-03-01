@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2026  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -94,6 +94,7 @@ protected:
   void onInitTheme(InitThemeEvent& ev) override;
   LayoutIO* onGetLayoutIO() override { return this; }
   void onNewDisplayConfiguration(Display* display) override;
+  bool onEnqueueMouseDown(MouseMessage* mouseMsg) override;
 
   // LayoutIO implementation
   std::string loadLayout(Widget* widget) override;
@@ -124,10 +125,11 @@ static bool create_main_window(bool gpuAccel, bool& maximized, std::string& last
   // executed.
   int scale = Preferences::instance().general.screenScale();
 
+  const os::SystemRef system = os::System::instance();
   try {
     if (!spec.frame().isEmpty() || !spec.contentRect().isEmpty()) {
       spec.scale(scale == 0 ? 2 : std::clamp(scale, 1, 4));
-      main_window = os::instance()->makeWindow(spec);
+      main_window = system->makeWindow(spec);
     }
   }
   catch (const os::WindowCreationException& e) {
@@ -144,7 +146,7 @@ static bool create_main_window(bool gpuAccel, bool& maximized, std::string& last
                                    0,
                                    try_resolutions[c].width * spec.scale(),
                                    try_resolutions[c].height * spec.scale()));
-        main_window = os::instance()->makeWindow(spec);
+        main_window = system->makeWindow(spec);
         break;
       }
       catch (const os::WindowCreationException& e) {
@@ -171,6 +173,7 @@ static bool create_main_window(bool gpuAccel, bool& maximized, std::string& last
 // Initializes GUI.
 int init_module_gui()
 {
+  const os::SystemRef system = os::System::instance();
   auto& pref = Preferences::instance();
   bool maximized = false;
   std::string lastError = "Unknown error";
@@ -179,7 +182,7 @@ int init_module_gui()
   if (!create_main_window(gpuAccel, maximized, lastError)) {
     // If we've created the native window with hardware acceleration,
     // now we try to do it without hardware acceleration.
-    if (gpuAccel && os::instance()->hasCapability(os::Capabilities::GpuAccelerationSwitch)) {
+    if (gpuAccel && system->hasCapability(os::Capabilities::GpuAccelerationSwitch)) {
       if (create_main_window(false, maximized, lastError)) {
         // Disable hardware acceleration
         pref.general.gpuAcceleration(false);
@@ -202,23 +205,6 @@ int init_module_gui()
 
   if (maximized)
     main_window->maximize();
-
-  // Handle live resize too redraw the entire manager, dispatch the UI
-  // messages, and flip the window.
-  os::instance()->handleWindowResize = [](os::Window* window) {
-    Display* display = Manager::getDisplayFromNativeWindow(window);
-    if (!display)
-      display = manager->display();
-    ASSERT(display);
-
-    Message* msg = new Message(kResizeDisplayMessage);
-    msg->setDisplay(display);
-    msg->setRecipient(manager);
-    msg->setPropagateToChildren(false);
-
-    manager->enqueueMessage(msg);
-    manager->dispatchMessages();
-  };
 
   // Set graphics options for next time
   save_gui_config();
@@ -245,7 +231,7 @@ void exit_module_gui()
 
 void update_windows_color_profile_from_preferences()
 {
-  auto system = os::instance();
+  const os::SystemRef system = os::System::instance();
 
   gen::WindowColorProfile windowProfile;
   if (Preferences::instance().color.manage())
@@ -294,7 +280,8 @@ void update_windows_color_profile_from_preferences()
 
 static bool load_gui_config(os::WindowSpec& spec, bool& maximized)
 {
-  os::ScreenRef screen = os::instance()->mainScreen();
+  const os::SystemRef system = os::System::instance();
+  os::ScreenRef screen = system->primaryScreen();
 #ifdef LAF_SKIA
   ASSERT(screen);
 #else
@@ -323,7 +310,7 @@ static bool load_gui_config(os::WindowSpec& spec, bool& maximized)
     // 2nd monitor that then unplugged and start Aseprite again.
     bool ok = false;
     os::ScreenList screens;
-    os::instance()->listScreens(screens);
+    os::System::instance()->listScreens(screens);
     for (const auto& screen : screens) {
       gfx::Rect wa = screen->workarea();
       gfx::Rect intersection = (frame & wa);
@@ -420,7 +407,7 @@ void load_window_pos(Window* window, const char* section, const bool limitMinSiz
   if (get_multiple_displays()) {
     Rect frame = get_config_rect(section, "WindowFrame", gfx::Rect());
     if (!frame.isEmpty()) {
-      limit_with_workarea(parentDisplay, frame);
+      limit_least(frame);
       window->loadNativeFrame(frame);
     }
   }
@@ -446,6 +433,12 @@ void save_window_pos(Window* window, const char* section)
   }
 
   set_config_rect(section, "WindowPos", rc);
+}
+
+void del_window_pos(const char* section)
+{
+  del_config_value(section, "WindowPos");
+  del_config_value(section, "WindowFrame");
 }
 
 // TODO Replace this with new theme styles
@@ -668,7 +661,8 @@ void CustomizedGuiManager::onInitTheme(InitThemeEvent& ev)
   Manager::onInitTheme(ev);
 
   // Update the theme on all menus
-  AppMenus::instance()->initTheme();
+  if (auto* menus = AppMenus::instance())
+    menus->initTheme();
 }
 
 void CustomizedGuiManager::onNewDisplayConfiguration(Display* display)
@@ -685,84 +679,97 @@ void CustomizedGuiManager::onNewDisplayConfiguration(Display* display)
   }
 }
 
+bool CustomizedGuiManager::onEnqueueMouseDown(MouseMessage* mouseMsg)
+{
+  ASSERT(mouseMsg->type() == kMouseDownMessage);
+
+  // If there is no modal window running...
+  App* app = App::instance();
+  if (app && getForegroundWindow() == app->mainWindow()) {
+    // Process a mouse button as a shortcut.
+    if (processKey(mouseMsg)) {
+      // Don't enqueue this message
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool CustomizedGuiManager::processKey(Message* msg)
 {
-  App* app = App::instance();
   const KeyboardShortcuts* keys = KeyboardShortcuts::instance();
-  const KeyContext contexts[] = { keys->getCurrentKeyContext(), KeyContext::Normal };
-  int n = (contexts[0] != contexts[1] ? 2 : 1);
-  for (int i = 0; i < n; ++i) {
-    for (const KeyPtr& key : *keys) {
-      if (key->isPressed(msg, *keys, contexts[i])) {
-        // Cancel menu-bar loops (to close any popup menu)
-        app->mainWindow()->getMenuBar()->cancelMenuLoop();
+  const KeyPtr key = keys->findBestKeyFromMessage(msg);
+  if (!key)
+    return false;
 
-        switch (key->type()) {
-          case KeyType::Tool: {
-            tools::Tool* current_tool = app->activeTool();
-            tools::Tool* select_this_tool = key->tool();
-            tools::ToolBox* toolbox = app->toolBox();
-            std::vector<tools::Tool*> possibles;
+  App* app = App::instance();
+  if (key->type() == KeyType::Tool || key->type() == KeyType::Command)
+    // Cancel menu-bar loops (to close any popup menu)
+    app->mainWindow()->getMenuBar()->cancelMenuLoop();
 
-            // Collect all tools with the pressed keyboard-shortcut
-            for (tools::Tool* tool : *toolbox) {
-              const KeyPtr key = keys->tool(tool);
-              if (key && key->isPressed(msg, *keys))
-                possibles.push_back(tool);
-            }
+  switch (key->type()) {
+    case KeyType::Tool: {
+      tools::Tool* current_tool = app->activeTool();
+      tools::Tool* select_this_tool = key->tool();
+      tools::ToolBox* toolbox = app->toolBox();
+      std::vector<tools::Tool*> possibles;
 
-            if (possibles.size() >= 2) {
-              bool done = false;
+      // Collect all tools with the pressed keyboard-shortcut
+      for (tools::Tool* tool : *toolbox) {
+        const KeyPtr key = keys->tool(tool);
+        if (key && key->isPressed(msg))
+          possibles.push_back(tool);
+      }
 
-              for (size_t i = 0; i < possibles.size(); ++i) {
-                if (possibles[i] != current_tool &&
-                    ToolBar::instance()->isToolVisible(possibles[i])) {
-                  select_this_tool = possibles[i];
-                  done = true;
-                  break;
-                }
-              }
+      if (possibles.size() >= 2) {
+        bool done = false;
 
-              if (!done) {
-                for (size_t i = 0; i < possibles.size(); ++i) {
-                  // If one of the possibilities is the current tool
-                  if (possibles[i] == current_tool) {
-                    // We select the next tool in the possibilities
-                    select_this_tool = possibles[(i + 1) % possibles.size()];
-                    break;
-                  }
-                }
-              }
-            }
-
-            ToolBar::instance()->selectTool(select_this_tool);
-            return true;
-          }
-
-          case KeyType::Command: {
-            Command* command = key->command();
-
-            // Commands are executed only when the main window is
-            // the current window running.
-            if (getForegroundWindow() == app->mainWindow()) {
-              // OK, so we can execute the command represented
-              // by the pressed-key in the message...
-              UIContext::instance()->executeCommandFromMenuOrShortcut(command, key->params());
-              return true;
-            }
-            break;
-          }
-
-          case KeyType::Quicktool: {
-            // Do nothing, it is used in the editor through the
-            // KeyboardShortcuts::getCurrentQuicktool() function.
+        for (size_t i = 0; i < possibles.size(); ++i) {
+          if (possibles[i] != current_tool && ToolBar::instance()->isToolVisible(possibles[i])) {
+            select_this_tool = possibles[i];
+            done = true;
             break;
           }
         }
-        break;
+
+        if (!done) {
+          for (size_t i = 0; i < possibles.size(); ++i) {
+            // If one of the possibilities is the current tool
+            if (possibles[i] == current_tool) {
+              // We select the next tool in the possibilities
+              select_this_tool = possibles[(i + 1) % possibles.size()];
+              break;
+            }
+          }
+        }
       }
+
+      ToolBar::instance()->selectTool(select_this_tool);
+      return true;
+    }
+
+    case KeyType::Command: {
+      Command* command = key->command();
+
+      // Commands are executed only when the main window is
+      // the current window running.
+      if (getForegroundWindow() == app->mainWindow()) {
+        // OK, so we can execute the command represented
+        // by the pressed-key in the message...
+        UIContext::instance()->executeCommandFromMenuOrShortcut(command, key->params());
+        return true;
+      }
+      break;
+    }
+
+    case KeyType::Quicktool: {
+      // Do nothing, it is used in the editor through the
+      // KeyboardShortcuts::getCurrentQuicktool() function.
+      break;
     }
   }
+
   return false;
 }
 

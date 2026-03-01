@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -44,6 +44,7 @@
 
 namespace doc {
 class Layer;
+class MaskBoundaries;
 class Sprite;
 } // namespace doc
 namespace gfx {
@@ -303,6 +304,8 @@ public:
   bool selectSliceBox(const gfx::Rect& box);
   void selectAllSlices();
   bool hasSelectedSlices() const { return !m_selectedSlices.empty(); }
+  void slicesTransforms(bool value) { m_slicesTransforms = value; }
+  bool slicesTransforms() const { return m_slicesTransforms; }
 
   // Called by DocView's InputChainElement::onCancel() impl when Esc
   // key is pressed to cancel the active selection.
@@ -314,6 +317,13 @@ public:
   // Used in case an unhandled exception was caught when processing
   // an Editor or EditorState event.
   void showUnhandledException(const std::exception& ex, const ui::Message* msg);
+
+  Mask* getSelectionToolMask() { return m_selectionToolMask.get(); }
+  void makeSelectionToolMask();
+  void deleteSelectionToolMask();
+  bool hasSelectionToolMask();
+
+  const TiledModeHelper& getTiledModeHelper() const { return m_tiledModeHelper; }
 
   static void registerCommands();
 
@@ -341,6 +351,8 @@ protected:
   void onRemoveSlice(DocEvent& ev) override;
   void onBeforeLayerVisibilityChange(DocEvent& ev, bool newState) override;
   void onBeforeLayerEditableChange(DocEvent& ev, bool newState) override;
+  void onBeforeSlicesDuplication(DocEvent& ev) override;
+  void onSliceDuplicated(DocEvent& ev) override;
 
   // ActiveToolObserver impl
   void onActiveToolChange(tools::Tool* tool) override;
@@ -349,7 +361,7 @@ private:
   enum class Flashing { None, WithFlashExtraCel, WaitingDeferedPaint };
 
   void setStateInternal(const EditorStatePtr& newState);
-  void updateQuicktool();
+  void updateQuicktool(const ui::Message* msg);
   void updateToolByTipProximity(ui::PointerType pointerType);
 
   // firstFromMouseDown=true when we call this function from the
@@ -360,6 +372,7 @@ private:
   void drawSpriteUnclippedRect(ui::Graphics* g, const gfx::Rect& rc);
   void drawMaskSafe();
   void drawMask(ui::Graphics* g);
+  void drawMaskBoundaries(ui::Graphics* g, doc::MaskBoundaries& segs, int antsOffset = 0);
   void drawGrid(ui::Graphics* g,
                 const gfx::Rect& spriteBounds,
                 const gfx::Rect& gridBounds,
@@ -456,6 +469,13 @@ private:
 
   DocView* m_docView;
 
+  // Special flag to avoid re-entering a new state when we are leaving
+  // the current one. This avoids an infinite onLeaveState() recursion
+  // in some special cases when an extension (third-party code)
+  // creates a new sprite change in the same sprite change scripting
+  // event.
+  bool m_leavingState = false;
+
   // Last known mouse position received by this editor when the
   // mouse button was pressed. Used for auto-scrolling. To get the
   // current mouse position on the editor you can use
@@ -490,6 +510,9 @@ private:
 
   // For slices
   doc::SelectedObjects m_selectedSlices;
+  // When true, modifications to slices positions/sizes will transform the
+  // pixels inside their boundaries.
+  bool m_slicesTransforms = false;
 
   // Active sprite editor with the keyboard focus.
   static Editor* m_activeEditor;
@@ -499,6 +522,11 @@ private:
   // same document can show the same preview image/stroke being drawn
   // (search for Render::setPreviewImage()).
   static std::unique_ptr<EditorRender> m_renderEngine;
+
+  // Used for selection tool feedback.
+  // TODO move this to SelectionToolLoopImpl
+  static std::unique_ptr<doc::Mask> m_selectionToolMask;
+  static std::unique_ptr<doc::MaskBoundaries> m_selectionToolMaskBoundaries;
 };
 
 } // namespace app

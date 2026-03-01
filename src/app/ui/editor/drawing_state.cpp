@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -65,7 +65,6 @@ DrawingState::DrawingState(Editor* editor, tools::ToolLoop* toolLoop, const Draw
   , m_delayedMouseMove(this, editor, get_delay_interval_for_tool_loop(toolLoop))
   , m_toolLoop(toolLoop)
   , m_toolLoopManager(new tools::ToolLoopManager(toolLoop))
-  , m_mouseMoveReceived(false)
   , m_mousePressedReceived(false)
   , m_processScrollChange(true)
 {
@@ -114,8 +113,6 @@ void DrawingState::initToolLoop(Editor* editor,
 
   m_velocity.reset();
   m_lastPointer = pointer;
-  m_mouseDownPos = (msg ? msg->position() : editor->editorToScreen(pointer.point()));
-  m_mouseDownTime = base::current_tick();
 
   m_toolLoopManager->prepareLoop(pointer);
   m_toolLoopManager->pressButton(pointer);
@@ -168,6 +165,16 @@ bool DrawingState::onMouseDown(Editor* editor, MouseMessage* msg)
   // line with the background color.
   bool recreateLoop = false;
   if (m_type == DrawingType::LineFreehand && !m_mousePressedReceived) {
+    // The Shift+a custom mouse button could start a drag action
+    // (e.g. Shift+X1 button), here we check if this is the case.
+    if (auto dragState = handleDragActionsFromMessage(editor, msg)) {
+      // Cancel the whole tool loop for the drag action.
+      m_toolLoopManager->cancel();
+      destroyLoopIfCanceled(editor);
+      editor->setState(dragState);
+      return true;
+    }
+
     recreateLoop = true;
   }
 
@@ -209,7 +216,7 @@ bool DrawingState::onMouseUp(Editor* editor, MouseMessage* msg)
   // selection tools with Add or Subtract mode aren't cancelled with
   // one click).
   if (!m_toolLoop->getInk()->isSelection() || m_toolLoop->getController()->isOnePoint() ||
-      !canInterpretMouseMovementAsJustOneClick() ||
+      !m_delayedMouseMove.canInterpretMouseMovementAsJustOneClick() ||
       // In case of double-click (to select tiles) we don't want to
       // deselect if the mouse is not moved. In this case the tile
       // will be selected anyway even if the mouse is not moved.
@@ -222,6 +229,8 @@ bool DrawingState::onMouseUp(Editor* editor, MouseMessage* msg)
     if (m_toolLoopManager->releaseButton(m_lastPointer))
       return true;
   }
+  if (m_toolLoop->isSelectionToolLoop())
+    m_toolLoop->clearSelectionToolMask(true);
 
   destroyLoop(editor);
 
@@ -263,14 +272,6 @@ bool DrawingState::onMouseMove(Editor* editor, MouseMessage* msg)
                                  button_from_msg(msg),
                                  msg->pointerType(),
                                  msg->pressure());
-
-  // Indicate that we've received a real mouse movement event here
-  // (used in the Rectangular Marquee to deselect when we just do a
-  // simple click without moving the mouse).
-  m_mouseMoveReceived = true;
-  gfx::Point delta = (msg->position() - m_mouseDownPos);
-  m_mouseMaxDelta.x = std::max(m_mouseMaxDelta.x, std::abs(delta.x));
-  m_mouseMaxDelta.y = std::max(m_mouseMaxDelta.y, std::abs(delta.y));
 
   // Use DelayedMouseMove for tools like line, rectangle, etc. (that
   // use the only the last mouse position) to filter out rapid mouse
@@ -380,15 +381,6 @@ void DrawingState::handleMouseMovement()
   m_toolLoopManager->movement(m_lastPointer);
 }
 
-bool DrawingState::canInterpretMouseMovementAsJustOneClick()
-{
-  // If the user clicked (pressed and released the mouse button) in
-  // less than 250 milliseconds in "the same place" (inside a 7 pixels
-  // rectangle actually, to detect stylus shake).
-  return !m_mouseMoveReceived || (m_mouseMaxDelta.x < 4 && m_mouseMaxDelta.y < 4 &&
-                                  (base::current_tick() - m_mouseDownTime < 250));
-}
-
 bool DrawingState::canExecuteCommands()
 {
   // Returning true here means that the user can trigger commands with
@@ -423,6 +415,9 @@ void DrawingState::destroyLoopIfCanceled(Editor* editor)
 {
   // Cancel drawing loop
   if (m_toolLoopManager->isCanceled()) {
+    if (m_toolLoop->isSelectionToolLoop())
+      m_toolLoop->clearSelectionToolMask(true);
+
     destroyLoop(editor);
 
     // Change to standby state
@@ -443,6 +438,11 @@ void DrawingState::destroyLoop(Editor* editor)
   m_toolLoop.reset(nullptr);
 
   app_rebuild_documents_tabs();
+}
+
+ExpandCelCanvas* DrawingState::expandCelCanvas() const
+{
+  return m_toolLoop->expandCelCanvas();
 }
 
 } // namespace app

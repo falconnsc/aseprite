@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2024  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -23,10 +23,7 @@
 #include "app/ui/main_window.h"
 #include "app/ui/preview_editor.h"
 #include "app/ui/status_bar.h"
-#include "app/util/conversion_to_surface.h"
-#include "doc/image.h"
 #include "doc/palette.h"
-#include "doc/primitives.h"
 #include "doc/sprite.h"
 #include "gfx/matrix.h"
 #include "os/surface.h"
@@ -177,7 +174,7 @@ protected:
 
     // Render sprite and leave the result in 'm_render' variable
     if (m_render == nullptr) {
-      m_render = os::instance()->makeRgbaSurface(m_sprite->width(), m_sprite->height());
+      m_render = os::System::instance()->makeRgbaSurface(m_sprite->width(), m_sprite->height());
 
 #if LAF_SKIA
       // The SimpleRenderer renders unpremultiplied surfaces when
@@ -308,8 +305,7 @@ protected:
   void onExecute(Context* context) override;
 };
 
-FullscreenPreviewCommand::FullscreenPreviewCommand()
-  : Command(CommandId::FullscreenPreview(), CmdUIOnlyFlag)
+FullscreenPreviewCommand::FullscreenPreviewCommand() : Command(CommandId::FullscreenPreview())
 {
 }
 

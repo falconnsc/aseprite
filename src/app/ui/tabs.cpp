@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -11,14 +11,17 @@
 
 #include "app/ui/tabs.h"
 
+#include "app/color_spaces.h"
 #include "app/color_utils.h"
 #include "app/modules/gfx.h"
 #include "app/modules/gui.h"
 #include "app/ui/editor/editor_view.h"
 #include "app/ui/skin/skin_theme.h"
-#include "os/font.h"
+#include "app/ui_context.h"
 #include "os/surface.h"
 #include "os/system.h"
+#include "text/font.h"
+#include "text/font_metrics.h"
 #include "ui/intern.h"
 #include "ui/ui.h"
 
@@ -59,12 +62,25 @@ Tabs::Tabs(TabsDelegate* delegate)
   , m_dragCopy(false)
   , m_dragTab(nullptr)
   , m_floatingTab(nullptr)
-  , m_floatingOverlay(nullptr)
   , m_dropNewTab(nullptr)
   , m_dropNewIndex(-1)
 {
   enableFlags(CTRL_RIGHT_CLICK);
   setDoubleBuffered(true);
+
+  m_beforeCmdConn = UIContext::instance()->BeforeCommandExecution.connect([this] {
+    if (m_isDragging) {
+      // Restores the workarea view size if we dragged on top of it
+      if (m_delegate)
+        m_delegate->onDockingTab(this, m_selected ? m_selected->view : nullptr);
+
+      // Cancel the copy
+      m_dragCopy = false;
+
+      stopDrag(DropTabResult::NOT_HANDLED);
+    }
+  });
+
   initTheme();
 }
 
@@ -73,8 +89,9 @@ Tabs::~Tabs()
   m_addedTab.reset();
   m_removedTab.reset();
 
-  // Stop animation
-  stopAnimation();
+  // Stop animation, can cause issues with docks when stopping during close.
+  if (!is_app_state_closing())
+    stopAnimation();
 
   // Remove all tabs
   m_list.clear();
@@ -169,7 +186,11 @@ void Tabs::updateTabs()
       x += tabWidth;
     }
 
-    tab->text = tab->view->getTabText();
+    std::string newText = tab->view->getTabText();
+    if (tab->text != newText) {
+      tab->text = newText;
+      tab->textBlob.reset();
+    }
     tab->icon = tab->view->getTabIcon();
     tab->color = tab->view->getTabColor();
     tab->x = int(x);
@@ -322,12 +343,17 @@ bool Tabs::onProcessMessage(Message* msg)
               result = m_delegate->onFloatingTab(this, m_selected->view, screenPos);
 
             if (result != DropViewPreviewResult::DROP_IN_TABS) {
-              if (!m_floatingOverlay)
-                createFloatingOverlay(m_selected.get());
-              m_floatingOverlay->moveOverlay(mousePos - m_floatingOffset);
+              // First time? Create the UILayer for the floating tab
+              if (!m_floatingUILayer)
+                createFloatingUILayer(m_selected.get());
+              else // In other case dirty the old position of the layer
+                display()->dirtyRect(m_floatingUILayer->bounds());
+
+              m_floatingUILayer->setPosition(mousePos - m_floatingOffset);
+              display()->dirtyRect(m_floatingUILayer->bounds());
             }
             else {
-              destroyFloatingOverlay();
+              destroyFloatingUILayer();
             }
           }
           else {
@@ -463,6 +489,13 @@ void Tabs::onInitTheme(ui::InitThemeEvent& ev)
     m_tabsBottomHeight = theme->dimensions.tabsBottomHeight();
     setStyle(theme->styles.mainTabs());
   }
+
+  // TODO hardcoded 1.5f scalar
+  m_tabsHeight = std::max<float>(m_tabsHeight, 1.5f * textHeight());
+
+  for (TabPtr& tab : m_list) {
+    tab->textBlob = nullptr;
+  }
 }
 
 void Tabs::onPaint(PaintEvent& ev)
@@ -543,6 +576,15 @@ void Tabs::onSizeHint(SizeHintEvent& ev)
   ev.setSizeHint(gfx::Size(0, m_tabsHeight));
 }
 
+float Tabs::onGetTextBaseline() const
+{
+  gfx::Rect box(0, 0, 1, m_tabsHeight - m_tabsBottomHeight);
+  text::FontMetrics metrics;
+  font()->metrics(&metrics);
+  const float textHeight = metrics.descent - metrics.ascent;
+  return guiscaled_center(box.y, box.h, textHeight) - metrics.ascent;
+}
+
 void Tabs::selectTabInternal(TabPtr& tab)
 {
   if (m_selected != tab) {
@@ -576,6 +618,7 @@ void Tabs::drawTab(Graphics* g, const gfx::Rect& _box, Tab* tab, int dy, bool ho
   PaintWidgetPartInfo info;
   info.styleFlags = (selected ? ui::Style::Layer::kFocus : 0) |
                     (hover ? ui::Style::Layer::kMouse : 0);
+  info.baseline = textBaseline();
   theme->paintWidgetPart(g, theme->styles.tab(), gfx::Rect(box.x, box.y + dy, box.w, box.h), info);
 
   gfx::Color tabColor = tab->color;
@@ -610,7 +653,17 @@ void Tabs::drawTab(Graphics* g, const gfx::Rect& _box, Tab* tab, int dy, bool ho
       Style* stylePtr = theme->styles.tabText();
       Style newStyle(nullptr);
 
+      if (!tab->textBlob) {
+        tab->textBlob = text::TextBlob::MakeWithShaper(theme->fontMgr(),
+                                                       font(),
+                                                       tab->text,
+                                                       nullptr,
+                                                       text::ShaperFeatures());
+      }
+
       info.text = &tab->text;
+      info.textBlob = tab->textBlob;
+
       if (tabColor != gfx::ColorNone) {
         // TODO replace these fillRect() with a new theme part (which
         // should be painted with the specific user-defined color)
@@ -631,6 +684,7 @@ void Tabs::drawTab(Graphics* g, const gfx::Rect& _box, Tab* tab, int dy, bool ho
                              gfx::Rect(box.x + dx, box.y + dy, box.w - dx, box.h),
                              info);
       info.text = nullptr;
+      info.textBlob = nullptr;
     }
   }
 
@@ -927,39 +981,40 @@ void Tabs::startRemoveDragTabAnimation()
   startAnimation(ANI_REMOVING_TAB, ANI_REMOVING_TAB_TICKS);
 }
 
-void Tabs::createFloatingOverlay(Tab* tab)
+void Tabs::createFloatingUILayer(Tab* tab)
 {
-  ASSERT(!m_floatingOverlay);
+  ASSERT(!m_floatingUILayer);
 
   ui::Display* display = this->display();
-  os::SurfaceRef surface = os::instance()->makeRgbaSurface(tab->width, m_tabsHeight);
+  os::SurfaceRef surface = os::System::instance()->makeRgbaSurface(
+    tab->width,
+    m_tabsHeight,
+    get_current_color_space(display));
 
-  // Fill the surface with pink color
+  // Fill the surface with the transparent color
   {
     os::SurfaceLock lock(surface.get());
     os::Paint paint;
     paint.color(gfx::rgba(0, 0, 0, 0));
     paint.style(os::Paint::Fill);
-    surface->drawRect(gfx::Rect(0, 0, surface->width(), surface->height()), paint);
+    surface->drawRect(surface->bounds(), paint);
   }
   {
-    Graphics g(display, surface, 0, 0);
-    g.setFont(AddRef(font()));
+    Graphics g(surface);
+    g.setFont(font());
     drawTab(&g, g.getClipBounds(), tab, 0, true, true);
   }
 
   surface->setImmutable();
 
-  m_floatingOverlay = base::make_ref<ui::Overlay>(display,
-                                                  surface,
-                                                  gfx::Point(),
-                                                  (ui::Overlay::ZOrder)(Overlay::MouseZOrder - 1));
-  OverlayManager::instance()->addOverlay(m_floatingOverlay);
+  m_floatingUILayer = UILayer::Make();
+  m_floatingUILayer->setSurface(surface);
+  display->addLayer(m_floatingUILayer);
 }
 
 void Tabs::destroyFloatingTab()
 {
-  destroyFloatingOverlay();
+  destroyFloatingUILayer();
 
   if (m_floatingTab) {
     TabPtr tab(m_floatingTab);
@@ -976,12 +1031,13 @@ void Tabs::destroyFloatingTab()
   }
 }
 
-void Tabs::destroyFloatingOverlay()
+void Tabs::destroyFloatingUILayer()
 {
-  if (m_floatingOverlay) {
-    OverlayManager::instance()->removeOverlay(m_floatingOverlay);
-    m_floatingOverlay.reset();
+  ui::Display* display = this->display();
+  if (display && m_floatingUILayer) {
+    display->removeLayer(m_floatingUILayer);
   }
+  m_floatingUILayer.reset();
 }
 
 void Tabs::updateMouseCursor()

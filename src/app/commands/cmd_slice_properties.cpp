@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2020  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2017-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -39,7 +39,7 @@ private:
 };
 
 SlicePropertiesCommand::SlicePropertiesCommand()
-  : Command(CommandId::SliceProperties(), CmdUIOnlyFlag)
+  : Command(CommandId::SliceProperties())
   , m_sliceId(NullId)
 {
 }
@@ -57,14 +57,13 @@ void SlicePropertiesCommand::onLoadParams(const Params& params)
 
 bool SlicePropertiesCommand::onEnabled(Context* context)
 {
-  return context->checkFlags(ContextFlags::ActiveDocumentIsWritable);
+  return context->isUIAvailable() && context->checkFlags(ContextFlags::ActiveDocumentIsWritable);
 }
 
 void SlicePropertiesCommand::onExecute(Context* context)
 {
   const ContextReader reader(context);
   const Sprite* sprite = reader.sprite();
-  frame_t frame = reader.frame();
   SelectedObjects slices;
 
   {
@@ -77,12 +76,25 @@ void SlicePropertiesCommand::onExecute(Context* context)
     if (slice)
       slices.insert(slice->id());
     else
-      slices = reader.site()->selectedSlices();
+      slices = reader.site().selectedSlices();
   }
 
   // Nothing to delete
   if (slices.empty())
     return;
+
+  const bool useKeys = Preferences::instance().slices.useKeys();
+  frame_t frame = (useKeys ? reader.frame() : 0);
+  if (!useKeys) {
+    // If there is one selected slice with multiple keys, we will
+    // modify the key in from the current frame.
+    for (Slice* slice : slices.iterateAs<Slice>()) {
+      if (slice->size() > 1) {
+        frame = reader.frame();
+        break;
+      }
+    }
+  }
 
   SliceWindow window(sprite, slices, frame);
   if (!window.show())

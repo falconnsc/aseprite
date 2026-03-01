@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -22,6 +22,8 @@
 #include "app/ui/color_button.h"
 #include "app/ui/drop_down_button.h"
 #include "app/ui/expr_entry.h"
+#include "app/ui/filename_field.h"
+#include "app/ui/font_entry.h"
 #include "app/ui/icon_button.h"
 #include "app/ui/mini_help_button.h"
 #include "app/ui/search_entry.h"
@@ -33,6 +35,7 @@
 #include "base/fs.h"
 #include "base/memory.h"
 #include "os/system.h"
+#include "ui/textedit.h"
 #include "ui/ui.h"
 
 #include "tinyxml2.h"
@@ -251,8 +254,21 @@ Widget* WidgetLoader::convertXmlElementToWidget(const XMLElement* elem,
     if (suffix)
       ((Entry*)widget)->setSuffix(suffix);
 
+    if (elem->Attribute("placeholder"))
+      ((Entry*)widget)->setPlaceholder(m_xmlTranslator(elem, "placeholder"));
+
     if (elem_name == "expr" && decimals)
       ((ExprEntry*)widget)->setDecimals(strtol(decimals, nullptr, 10));
+  }
+  else if (elem_name == "filename") {
+    const bool buttononly = bool_attr(elem, "buttononly", false);
+    const app::FilenameField::Type type = (buttononly ? app::FilenameField::Type::ButtonOnly :
+                                                        app::FilenameField::Type::EntryAndButton);
+
+    widget = new app::FilenameField(type, "");
+  }
+  else if (elem_name == "textedit") {
+    widget = new TextEdit();
   }
   else if (elem_name == "grid") {
     const char* columns = elem->Attribute("columns");
@@ -273,6 +289,11 @@ Widget* WidgetLoader::convertXmlElementToWidget(const XMLElement* elem,
 
     widget->setAlign((center ? CENTER : (right ? RIGHT : LEFT)) |
                      (top ? TOP : (bottom ? BOTTOM : MIDDLE)));
+
+    const char* buddy = elem->Attribute("for");
+    if (buddy != NULL) {
+      ((Label*)widget)->setBuddy(buddy);
+    }
   }
   else if (elem_name == "link") {
     const char* url = elem->Attribute("url");
@@ -499,7 +520,7 @@ Widget* WidgetLoader::convertXmlElementToWidget(const XMLElement* elem,
           throw base::Exception("File %s not found", file);
 
         try {
-          os::SurfaceRef sur = os::instance()->loadRgbaSurface(rf.filename().c_str());
+          os::SurfaceRef sur = os::System::instance()->loadRgbaSurface(rf.filename().c_str());
           if (sur) {
             sur->setImmutable();
             widget = new ImageView(sur, 0);
@@ -520,6 +541,15 @@ Widget* WidgetLoader::convertXmlElementToWidget(const XMLElement* elem,
   else if (elem_name == "search") {
     if (!widget)
       widget = new SearchEntry;
+
+    if (elem->Attribute("placeholder"))
+      ((SearchEntry*)widget)->setPlaceholder(m_xmlTranslator(elem, "placeholder"));
+    else
+      ((SearchEntry*)widget)->setPlaceholder(Strings::general_search());
+  }
+  else if (elem_name == "font") {
+    if (!widget)
+      widget = new FontEntry(false);
   }
 
   // Was the widget created?

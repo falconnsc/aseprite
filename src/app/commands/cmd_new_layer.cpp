@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -21,9 +21,7 @@
 #include "app/console.h"
 #include "app/context_access.h"
 #include "app/doc_api.h"
-#include "app/find_widget.h"
 #include "app/i18n/strings.h"
-#include "app/load_widget.h"
 #include "app/modules/gui.h"
 #include "app/pref/preferences.h"
 #include "app/restore_visible_layers.h"
@@ -34,7 +32,6 @@
 #include "app/ui_context.h"
 #include "app/util/clipboard.h"
 #include "app/util/new_image_from_mask.h"
-#include "app/util/range_utils.h"
 #include "doc/layer.h"
 #include "doc/layer_tilemap.h"
 #include "doc/primitives.h"
@@ -49,7 +46,6 @@
 #include "new_layer.xml.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -100,7 +96,7 @@ private:
   Place m_place;
 };
 
-NewLayerCommand::NewLayerCommand() : CommandWithNewParams(CommandId::NewLayer(), CmdRecordableFlag)
+NewLayerCommand::NewLayerCommand() : CommandWithNewParams(CommandId::NewLayer())
 {
 }
 
@@ -231,6 +227,7 @@ void NewLayerCommand::onExecute(Context* context)
     if (isTilemap) {
       tilesetSelector = new TilesetSelector(sprite, tilesetInfo);
       window.tilesetOptions()->addChild(tilesetSelector);
+      window.tilesetLabel()->setBuddy(tilesetSelector->tilesets());
     }
 
     window.openWindowInForeground();
@@ -268,11 +265,7 @@ void NewLayerCommand::onExecute(Context* context)
     bool afterBackground = false;
 
     switch (m_type) {
-      case Type::Layer:
-        layer = api.newLayer(parent, name);
-        if (m_place == Place::BeforeActiveLayer)
-          api.restackLayerBefore(layer, parent, activeLayer);
-        break;
+      case Type::Layer: layer = api.newLayer(parent, name); break;
       case Type::Group: layer = api.newGroup(parent, name); break;
       case Type::ReferenceLayer:
         layer = api.newLayer(parent, name);
@@ -297,9 +290,7 @@ void NewLayerCommand::onExecute(Context* context)
           tsi = tilesetInfo.tsi;
         }
 
-        layer = new LayerTilemap(sprite, tsi);
-        layer->setName(name);
-        api.addLayer(parent, layer, parent->lastLayer());
+        layer = api.newTilemapAfter(parent, name, tsi, activeLayer);
         break;
       }
     }
@@ -309,6 +300,15 @@ void NewLayerCommand::onExecute(Context* context)
       return;
 
     ASSERT(layer->parent());
+
+    // Reorder the resulting layer.
+    switch (m_place) {
+      case Place::AfterActiveLayer:  api.restackLayerAfter(layer, parent, activeLayer); break;
+      case Place::BeforeActiveLayer: api.restackLayerBefore(layer, parent, activeLayer); break;
+      case Place::Top:
+        api.restackLayerAfter(layer, sprite->root(), sprite->root()->lastLayer());
+        break;
+    }
 
     // Put new layer as an overlay of the background or in the first
     // layer in case the sprite is transparent.
@@ -320,10 +320,6 @@ void NewLayerCommand::onExecute(Context* context)
         else
           api.restackLayerBefore(layer, sprite->root(), first);
       }
-    }
-    // Move the layer above the active one.
-    else if (activeLayer && m_place == Place::AfterActiveLayer) {
-      api.restackLayerAfter(layer, activeLayer->parent(), activeLayer);
     }
 
     // Put all selected layers inside the group

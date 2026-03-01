@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2020-2023  Igara Studio S.A.
+// Copyright (C) 2020-2024  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -181,7 +181,7 @@ bool ColorButton::onProcessMessage(Message* msg)
 
           // Or get the color from the screen
           if (gfxColor == gfx::ColorNone) {
-            gfxColor = os::instance()->getColorFromScreen(screenPos);
+            gfxColor = os::System::instance()->getColorFromScreen(screenPos);
           }
 
           color = app::Color::fromRgb(gfx::getr(gfxColor),
@@ -264,7 +264,7 @@ void ColorButton::onPaint(PaintEvent& ev)
     }
   }
 
-  draw_color_button(g, rc, color, (doc::ColorMode)m_pixelFormat, hasMouse(), false);
+  draw_color_button(g, rc, color, (doc::ColorMode)m_pixelFormat, hasMouse() || hasFocus(), false);
 
   // Draw text
   std::string str = m_color.toHumanReadableString(m_pixelFormat,

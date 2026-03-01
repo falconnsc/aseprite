@@ -19,7 +19,6 @@
 #include "app/tx.h"
 #include "app/ui/editor/editor.h"
 #include "doc/mask.h"
-#include "ui/system.h"
 
 namespace app {
 
@@ -40,7 +39,7 @@ private:
 };
 
 SelectTileCommand::SelectTileCommand()
-  : Command(CommandId::SelectTile(), CmdRecordableFlag)
+  : Command(CommandId::SelectTile())
   , m_mode(gen::SelectionMode::DEFAULT)
 {
 }
@@ -60,7 +59,8 @@ void SelectTileCommand::onLoadParams(const Params& params)
 
 bool SelectTileCommand::onEnabled(Context* ctx)
 {
-  return ctx->checkFlags(ContextFlags::ActiveDocumentIsWritable);
+  return ctx->checkFlags(ContextFlags::ActiveDocumentIsWritable) && ctx->isUIAvailable() &&
+         Editor::activeEditor()->hasMouse();
 }
 
 void SelectTileCommand::onExecute(Context* ctx)
@@ -79,7 +79,7 @@ void SelectTileCommand::onExecute(Context* ctx)
     mask->copyFrom(doc->mask());
 
   {
-    gfx::Rect gridBounds = writer.site()->gridBounds();
+    gfx::Rect gridBounds = writer.site().gridBounds();
     gfx::Point pos = editor->screenToEditor(editor->mousePosInDisplay());
     pos = snap_to_grid(gridBounds, pos, PreferSnapTo::BoxOrigin);
     gridBounds.setOrigin(pos);

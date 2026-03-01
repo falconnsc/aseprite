@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -14,6 +14,7 @@
 #include "ui/grid.h"
 #include "ui/message.h"
 #include "ui/resize_event.h"
+#include "ui/scale.h"
 #include "ui/size_hint_event.h"
 #include "ui/theme.h"
 #include "ui/widget.h"
@@ -127,7 +128,7 @@ void Grid::setStyle(Style* style)
 {
   ASSERT(style);
   if (!style)
-    style = Theme::getDefaultStyle();
+    style = Theme::EmptyStyle();
   Widget::setStyle(style);
   setGap(style->gap());
 }
@@ -180,13 +181,13 @@ void Grid::onResize(ResizeEvent& ev)
         calculateCellSize(col, cell->hspan, m_colstrip, w);
         calculateCellSize(row, cell->vspan, m_rowstrip, h);
 
-        reqSize = cell->child->sizeHint();
+        reqSize = cell->child->sizeHint(Size(w, h));
 
         if (cell->align & LEFT) {
           w = reqSize.w;
         }
         else if (cell->align & CENTER) {
-          x += w / 2 - reqSize.w / 2;
+          x = guiscaled_center(x, w, reqSize.w);
           w = reqSize.w;
         }
         else if (cell->align & RIGHT) {
@@ -198,7 +199,7 @@ void Grid::onResize(ResizeEvent& ev)
           h = reqSize.h;
         }
         else if (cell->align & MIDDLE) {
-          y += h / 2 - reqSize.h / 2;
+          y = guiscaled_center(y, h, reqSize.h);
           h = reqSize.h;
         }
         else if (cell->align & BOTTOM) {
@@ -260,12 +261,13 @@ void Grid::sumStripSize(const std::vector<Strip>& strip, int& size)
 
 void Grid::calculateCellSize(int start, int span, const std::vector<Strip>& strip, int& size)
 {
+  const int limit = std::min(start + span, int(strip.size()));
   int i, j;
   int gap = (&strip == &m_colstrip ? m_colgap : m_rowgap);
 
   size = 0;
 
-  for (i = start, j = 0; i < start + span; ++i) {
+  for (i = start, j = 0; i < limit; ++i) {
     if (strip[i].size > 0) {
       size += strip[i].size;
       if (++j > 1)
@@ -378,15 +380,18 @@ void Grid::expandStrip(std::vector<Strip>& colstrip,
           ASSERT(cell_span > 0);
 
           if (cell_span == current_span) {
+            const int limit = std::min(col + cell_span, int(colstrip.size()));
+
             // Calculate the maximum (expand_count) in cell's columns.
             int max_expand_count = 0;
-            for (i = col; i < col + cell_span; ++i)
+            for (i = col; i < limit; ++i) {
               max_expand_count = std::max(max_expand_count, colstrip[i].expand_count);
+            }
 
             int expand = 0;      // How many columns have the maximum value of "expand_count"
             int last_expand = 0; // This variable is used to add the remainder space to the last
                                  // column
-            for (i = col; i < col + cell_span; ++i) {
+            for (i = col; i < limit; ++i) {
               if (colstrip[i].expand_count == max_expand_count) {
                 ++expand;
                 last_expand = i;
@@ -394,8 +399,8 @@ void Grid::expandStrip(std::vector<Strip>& colstrip,
             }
 
             // Divide the available size of the cell in the number of columns which are expandible
-            int size = cell_size / expand;
-            for (i = col; i < col + cell_span; ++i) {
+            int size = guiscaled_div(cell_size, expand);
+            for (i = col; i < limit; ++i) {
               if (colstrip[i].expand_count == max_expand_count) {
                 // For the last column, use all the available space in the column
                 if (last_expand == i) {
@@ -468,7 +473,7 @@ void Grid::distributeStripSize(std::vector<Strip>& colstrip,
       }
     }
 
-    int extra_foreach = extra_total / wantmore_count;
+    int extra_foreach = guiscaled_div(extra_total, wantmore_count);
 
     for (i = 0; i < (int)colstrip.size(); ++i) {
       if (colstrip[i].expand_count == max_expand_count || same_width) {

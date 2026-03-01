@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2022  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,6 +15,7 @@
 #include "app/ui/editor/editor.h"
 #include "os/system.h"
 #include "os/window.h"
+#include "ui/display.h"
 
 namespace app {
 
@@ -29,17 +30,15 @@ void initialize_color_spaces(Preferences& pref)
   pref.color.manage.AfterChange.connect([](bool manage) { g_manage = manage; });
 }
 
-os::ColorSpaceRef get_screen_color_space()
+os::ColorSpaceRef get_current_color_space(ui::Display* display, Doc* doc)
 {
-  return os::instance()->defaultWindow()->colorSpace();
-}
-
-os::ColorSpaceRef get_current_color_space()
-{
-  if (auto* editor = Editor::activeEditor())
-    return editor->document()->osColorSpace();
-  else
-    return get_screen_color_space();
+  if (!doc) {
+    if (auto* editor = Editor::activeEditor())
+      doc = editor->document();
+  }
+  if (doc)
+    return doc->osColorSpace();
+  return display->colorSpace();
 }
 
 gfx::ColorSpaceRef get_working_rgb_space_from_preferences()
@@ -50,7 +49,7 @@ gfx::ColorSpaceRef get_working_rgb_space_from_preferences()
       return gfx::ColorSpace::MakeSRGB();
 
     std::vector<os::ColorSpaceRef> colorSpaces;
-    os::instance()->listColorSpaces(colorSpaces);
+    os::System::instance()->listColorSpaces(colorSpaces);
     for (auto& cs : colorSpaces) {
       if (cs->gfxColorSpace()->name() == name)
         return cs->gfxColorSpace();
@@ -62,20 +61,20 @@ gfx::ColorSpaceRef get_working_rgb_space_from_preferences()
 //////////////////////////////////////////////////////////////////////
 // Color conversion
 
-ConvertCS::ConvertCS()
+ConvertCS::ConvertCS(ui::Display* display, Doc* doc)
 {
   if (g_manage) {
-    auto srcCS = get_current_color_space();
-    auto dstCS = get_screen_color_space();
+    auto srcCS = get_current_color_space(display, doc);
+    auto dstCS = display->colorSpace();
     if (srcCS && dstCS)
-      m_conversion = os::instance()->convertBetweenColorSpace(srcCS, dstCS);
+      m_conversion = os::System::instance()->convertBetweenColorSpace(srcCS, dstCS);
   }
 }
 
 ConvertCS::ConvertCS(const os::ColorSpaceRef& srcCS, const os::ColorSpaceRef& dstCS)
 {
   if (g_manage) {
-    m_conversion = os::instance()->convertBetweenColorSpace(srcCS, dstCS);
+    m_conversion = os::System::instance()->convertBetweenColorSpace(srcCS, dstCS);
   }
 }
 
@@ -95,14 +94,14 @@ gfx::Color ConvertCS::operator()(const gfx::Color c)
   }
 }
 
-ConvertCS convert_from_current_to_screen_color_space()
+ConvertCS convert_from_current_to_display_color_space(ui::Display* display)
 {
-  return ConvertCS();
+  return ConvertCS(display);
 }
 
 ConvertCS convert_from_custom_to_srgb(const os::ColorSpaceRef& from)
 {
-  return ConvertCS(from, os::instance()->makeColorSpace(gfx::ColorSpace::MakeSRGB()));
+  return ConvertCS(from, os::System::instance()->makeColorSpace(gfx::ColorSpace::MakeSRGB()));
 }
 
 } // namespace app

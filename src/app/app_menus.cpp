@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -26,7 +26,6 @@
 #include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/main_window.h"
 #include "app/ui_context.h"
-#include "app/util/filetoks.h"
 #include "base/fs.h"
 #include "base/string.h"
 #include "fmt/format.h"
@@ -67,11 +66,6 @@ const int kUnicodeUp = 0xF700;       // NSUpArrowFunctionKey
 const int kUnicodeDown = 0xF701;     // NSDownArrowFunctionKey
 
 const char* kFileRecentListGroup = "file_recent_list";
-
-void destroy_instance(AppMenus* instance)
-{
-  delete instance;
-}
 
 bool is_text_entry_shortcut(const os::Shortcut& shortcut)
 {
@@ -115,14 +109,15 @@ bool can_call_global_shortcut(const AppMenuItem::Native* native)
     // prefer text input, so we cannot call shortcuts without
     // modifiers (e.g. F or T keystrokes) to trigger a global command
     // in a text field.
-    (focus == nullptr || focus->type() != ui::kEntryWidget ||
+    (focus == nullptr ||
+     (focus->type() != ui::kEntryWidget && focus->type() != ui::kTextEditWidget) ||
      !is_text_entry_shortcut(native->shortcut)) &&
     (native->keyContext == KeyContext::Any ||
-     native->keyContext == KeyboardShortcuts::instance()->getCurrentKeyContext());
+     native->keyContext == KeyboardShortcuts::getCurrentKeyContext());
 }
 
-// TODO this should be on "she" library (or we should use
-// os::Shortcut instead of ui::Accelerators)
+// TODO this should be on laf-os library (or we should use
+// os::Shortcut instead of ui::Shortcuts)
 int from_scancode_to_unicode(KeyScancode scancode)
 {
   static int map[] = {
@@ -289,39 +284,42 @@ void destroy_menu_item(ui::Widget* item)
 
 os::Shortcut get_os_shortcut_from_key(const Key* key)
 {
-  if (key && !key->accels().empty()) {
-    const ui::Accelerator& accel = key->accels().front();
+  if (key && !key->shortcuts().empty()) {
+    const ui::Shortcut& shortcut = key->shortcuts().front();
 
-#ifdef __APPLE__
+#if LAF_MACOS
     // Shortcuts with spacebar as modifier do not work well in macOS
     // (they will be called when the space bar is unpressed too).
-    if ((accel.modifiers() & ui::kKeySpaceModifier) == ui::kKeySpaceModifier)
+    if ((shortcut.modifiers() & ui::kKeySpaceModifier) == ui::kKeySpaceModifier)
       return os::Shortcut();
 #endif
 
-    return os::Shortcut(
-      (accel.unicodeChar() ? accel.unicodeChar() : from_scancode_to_unicode(accel.scancode())),
-      accel.modifiers());
+    return os::Shortcut((shortcut.unicodeChar() ? shortcut.unicodeChar() :
+                                                  from_scancode_to_unicode(shortcut.scancode())),
+                        shortcut.modifiers());
   }
-  else
-    return os::Shortcut();
+  return {};
 }
+
+AppMenus* AppMenus::s_instance = nullptr;
 
 // static
 AppMenus* AppMenus::instance()
 {
-  static AppMenus* instance = NULL;
-  if (!instance) {
-    instance = new AppMenus;
-    App::instance()->Exit.connect([] { destroy_instance(instance); });
-  }
-  return instance;
+  return s_instance;
 }
 
-AppMenus::AppMenus() : m_recentFilesPlaceholder(nullptr), m_osMenu(nullptr)
+AppMenus::AppMenus(RecentFiles* recentFiles) : m_recentFilesPlaceholder(nullptr), m_osMenu(nullptr)
 {
-  m_recentFilesConn = App::instance()->recentFiles()->Changed.connect(
-    [this] { rebuildRecentList(); });
+  ASSERT(s_instance == nullptr);
+  s_instance = this;
+  m_recentFilesConn = recentFiles->Changed.connect([this] { rebuildRecentList(); });
+}
+
+AppMenus::~AppMenus()
+{
+  ASSERT(s_instance == this);
+  s_instance = nullptr;
 }
 
 void AppMenus::reload()
@@ -465,6 +463,8 @@ void AppMenus::reload()
   // Create native menus after the default + user defined keyboard
   // shortcuts are loaded correctly.
   createNativeMenus();
+
+  MenusLoaded();
 }
 
 #ifdef ENABLE_SCRIPTING
@@ -564,7 +564,7 @@ bool AppMenus::rebuildRecentList()
 
   // Sync native menus
   if (owner->native() && owner->native()->menuItem) {
-    auto menus = os::instance()->menus();
+    auto menus = os::System::instance()->menus();
     os::MenuRef osMenu = (menus ? menus->makeMenu() : nullptr);
     if (osMenu) {
       createNativeSubmenus(osMenu.get(), menu);
@@ -720,7 +720,6 @@ Widget* AppMenus::convertXmlelemToMenuitem(XMLElement* elem, Menu* menu)
 {
   const char* id = elem->Attribute("id");
   const char* group = elem->Attribute("group");
-  const char* standard = elem->Attribute("standard");
 
   // is it a <separator>?
   if (strcmp(elem->Value(), "separator") == 0) {
@@ -781,8 +780,11 @@ Widget* AppMenus::convertXmlelemToMenuitem(XMLElement* elem, Menu* menu)
     m_groups[group].end = menuitem;
   }
 
+#if LAF_MACOS
+  const char* standard = elem->Attribute("standard");
   if (standard && strcmp(standard, "edit") == 0)
-    menuitem->setStandardEditMenu();
+    menuitem->setAsStandardEditMenu();
+#endif
 
   // Has it a ID?
   if (id) {
@@ -878,7 +880,7 @@ void AppMenus::updateMenusList()
 
 void AppMenus::createNativeMenus()
 {
-  os::Menus* menus = os::instance()->menus();
+  os::Menus* menus = os::System::instance()->menus();
   if (!menus) // This platform doesn't support native menu items
     return;
 
@@ -886,7 +888,7 @@ void AppMenus::createNativeMenus()
   os::MenuRef oldOSMenu = m_osMenu;
   m_osMenu = menus->makeMenu();
 
-#ifdef __APPLE__ // Create default macOS app menus (App ... Window)
+#if LAF_MACOS // Create default macOS app menus (App ... Window)
   {
     os::MenuItemInfo about(fmt::format("About {}", get_app_name()));
     auto native = get_native_shortcut_for_command(CommandId::About());
@@ -940,7 +942,7 @@ void AppMenus::createNativeMenus()
 
   createNativeSubmenus(m_osMenu.get(), m_rootMenu.get());
 
-#ifdef __APPLE__
+#if LAF_MACOS
   {
     // Search the index where help menu is located (so the Window menu
     // can take its place/index position)
@@ -976,7 +978,7 @@ void AppMenus::createNativeMenus()
 
 void AppMenus::createNativeSubmenus(os::Menu* osMenu, const ui::Menu* uiMenu)
 {
-  os::Menus* menus = os::instance()->menus();
+  os::Menus* menus = os::System::instance()->menus();
 
   for (const auto& child : uiMenu->children()) {
     os::MenuItemInfo info;
@@ -1022,10 +1024,6 @@ void AppMenus::createNativeSubmenus(os::Menu* osMenu, const ui::Menu* uiMenu)
       if (appMenuItem) {
         native.menuItem = osItem;
         appMenuItem->setNative(native);
-
-        // Set this menu item as the standard "Edit" item for macOS
-        if (appMenuItem->isStandardEditMenu())
-          osItem->setAsStandardEditMenuItem();
       }
 
       if (child->type() == ui::kMenuItemWidget && ((ui::MenuItem*)child)->hasSubmenu()) {

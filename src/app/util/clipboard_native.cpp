@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2020-2024  Igara Studio S.A.
+// Copyright (C) 2020-2025  Igara Studio S.A.
 // Copyright (C) 2016-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -17,9 +17,9 @@
 #include "doc/color_scales.h"
 #include "doc/file/hex_file.h"
 #include "doc/image.h"
-#include "doc/image_impl.h"
 #include "doc/image_io.h"
 #include "doc/mask_io.h"
+#include "doc/palette.h"
 #include "doc/palette_io.h"
 #include "doc/tileset_io.h"
 #include "gfx/size.h"
@@ -54,8 +54,9 @@ public:
 
 void* native_window_handle()
 {
-  if (os::instance()->defaultWindow())
-    return os::instance()->defaultWindow()->nativeHandle();
+  auto system = os::System::instance();
+  if (system && system->defaultWindow())
+    return system->defaultWindow()->nativeHandle();
   return nullptr;
 }
 
@@ -152,12 +153,12 @@ bool Clipboard::setNativeBitmap(const doc::Image* image,
   switch (image->pixelFormat()) {
     case doc::IMAGE_RGB: {
       // We use the RGB image data directly
-      clip::image img(image->getPixelAddress(0, 0), spec);
+      const clip::image img(image->getPixelAddress(0, 0), spec);
       l.set_image(img);
       break;
     }
     case doc::IMAGE_GRAYSCALE: {
-      clip::image img(spec);
+      const clip::image img(spec);
       const doc::LockImageBits<doc::GrayscaleTraits> bits(image);
       auto it = bits.begin();
       uint32_t* dst = (uint32_t*)img.data();
@@ -174,7 +175,10 @@ bool Clipboard::setNativeBitmap(const doc::Image* image,
       break;
     }
     case doc::IMAGE_INDEXED: {
-      clip::image img(spec);
+      if (!palette)
+        return false;
+
+      const clip::image img(spec);
       const doc::LockImageBits<doc::IndexedTraits> bits(image);
       auto it = bits.begin();
       uint32_t* dst = (uint32_t*)img.data();
@@ -192,6 +196,7 @@ bool Clipboard::setNativeBitmap(const doc::Image* image,
       l.set_image(img);
       break;
     }
+    default: return false;
   }
 
   return true;
@@ -229,7 +234,7 @@ bool Clipboard::getNativeBitmap(doc::Image** image,
         if (bits & 4)
           *palette = doc::read_palette(is);
         if (bits & 8)
-          *tileset = doc::read_tileset(is, nullptr);
+          *tileset = doc::read_tileset(is, nullptr, false);
         if (image)
           return true;
       }
@@ -306,7 +311,7 @@ bool Clipboard::getNativeBitmap(doc::Image** image,
         for (unsigned long x = 0; x < spec.width; ++x, ++it, ++src) {
           const uint16_t c = *((const uint16_t*)src);
           *it = doc::rgba(doc::scale_5bits_to_8bits((c & spec.red_mask) >> spec.red_shift),
-                          doc::scale_6bits_to_8bits((c & spec.green_mask) >> spec.green_shift),
+                          doc::scale_5bits_to_8bits((c & spec.green_mask) >> spec.green_shift),
                           doc::scale_5bits_to_8bits((c & spec.blue_mask) >> spec.blue_shift),
                           255);
         }

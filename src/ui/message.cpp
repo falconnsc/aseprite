@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2018-2021  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -14,8 +14,10 @@
 #include "base/memory.h"
 #include "os/system.h"
 #include "ui/display.h"
+#include "ui/shortcut.h"
 #include "ui/widget.h"
 
+#include <cctype>
 #include <cstring>
 
 namespace ui {
@@ -26,15 +28,24 @@ Message::Message(MessageType type, KeyModifiers modifiers)
   , m_display(nullptr)
   , m_recipient(nullptr)
   , m_commonAncestor(nullptr)
+  , m_modifiers(modifiers)
 {
-  if (modifiers == kKeyUninitializedModifier && os::instance())
-    m_modifiers = os::instance()->keyModifiers();
-  else
-    m_modifiers = modifiers;
 }
 
 Message::~Message()
 {
+}
+
+KeyModifiers Message::modifiers() const
+{
+  if (m_modifiers == kKeyUninitializedModifier) {
+    const os::SystemRef system = os::System::instance();
+    if (system)
+      m_modifiers = system->keyModifiers();
+    else
+      m_modifiers = kKeyNoneModifier;
+  }
+  return m_modifiers;
 }
 
 void Message::setDisplay(Display* display)
@@ -55,11 +66,16 @@ void Message::removeRecipient(Widget* widget)
     m_recipient = nullptr;
 }
 
-KeyMessage::KeyMessage(MessageType type,
-                       KeyScancode scancode,
-                       KeyModifiers modifiers,
-                       int unicodeChar,
-                       int repeat)
+Shortcut Message::shortcut() const
+{
+  return {};
+}
+
+KeyMessage::KeyMessage(const MessageType type,
+                       const KeyScancode scancode,
+                       const KeyModifiers modifiers,
+                       const base::codepoint_t unicodeChar,
+                       const int repeat)
   : Message(type, modifiers)
   , m_scancode(scancode)
   , m_unicodeChar(unicodeChar)
@@ -67,6 +83,11 @@ KeyMessage::KeyMessage(MessageType type,
   , m_isDead(false)
 {
   setPropagateToParent(true);
+}
+
+Shortcut KeyMessage::shortcut() const
+{
+  return Shortcut(modifiers(), scancode(), (unicodeChar() > 32 ? std::tolower(unicodeChar()) : 0));
 }
 
 gfx::Point MouseMessage::positionForDisplay(Display* anotherDisplay) const
@@ -84,6 +105,11 @@ gfx::Point MouseMessage::positionForDisplay(Display* anotherDisplay) const
 gfx::Point MouseMessage::screenPosition() const
 {
   return display()->nativeWindow()->pointToScreen(position());
+}
+
+Shortcut MouseMessage::shortcut() const
+{
+  return Shortcut(modifiers(), button());
 }
 
 } // namespace ui

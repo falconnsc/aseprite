@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2017-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -13,7 +13,6 @@
 #include "app/commands/command.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
-#include "app/commands/filters/filter_worker.h"
 #include "app/commands/new_params.h"
 #include "app/context.h"
 #include "app/ini_file.h"
@@ -140,7 +139,7 @@ protected:
 };
 
 HueSaturationCommand::HueSaturationCommand()
-  : CommandWithNewParams<HueSaturationParams>(CommandId::HueSaturation(), CmdRecordableFlag)
+  : CommandWithNewParams<HueSaturationParams>(CommandId::HueSaturation())
 {
 }
 
@@ -177,7 +176,7 @@ void HueSaturationCommand::onExecute(Context* ctx)
     window.doModal();
   }
   else {
-    start_filter_worker(&filterMgr);
+    filterMgr.startWorker(false);
   }
 }
 

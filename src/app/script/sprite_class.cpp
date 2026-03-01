@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -54,6 +54,7 @@
 #include "app/ui/doc_view.h"
 #include "base/convert_to.h"
 #include "base/fs.h"
+#include "base/gcd.h"
 #include "doc/layer.h"
 #include "doc/layer_tilemap.h"
 #include "doc/mask.h"
@@ -63,6 +64,7 @@
 #include "doc/tag.h"
 #include "doc/tileset.h"
 #include "doc/tilesets.h"
+#include "undo/undo_state.h"
 
 #include <algorithm>
 
@@ -455,7 +457,7 @@ int Sprite_newCel(lua_State* L)
   auto sprite = get_docobj<Sprite>(L, 1);
   auto layerBase = get_docobj<Layer>(L, 2);
   if (!layerBase->isImage())
-    return luaL_error(L, "unexpected kinf of layer in Sprite:newCel()");
+    return luaL_error(L, "unexpected kind of layer in Sprite:newCel()");
 
   frame_t frame = get_frame_number_from_arg(L, 3);
   if (frame < 0 || frame > sprite->lastFrame())
@@ -973,7 +975,13 @@ int Sprite_get_pixelRatio(lua_State* L)
 int Sprite_set_pixelRatio(lua_State* L)
 {
   auto sprite = get_docobj<Sprite>(L, 1);
-  const gfx::Size pixelRatio = convert_args_into_size(L, 2);
+  gfx::Size pixelRatio = convert_args_into_size(L, 2);
+  if (pixelRatio.w < 1 || pixelRatio.h < 1)
+    return luaL_error(L, "invalid pixel ratio = %d:%d", pixelRatio.w, pixelRatio.h);
+
+  double gcd = base::gcd(double(pixelRatio.w), double(pixelRatio.h));
+  pixelRatio.w = int(double(pixelRatio.w) / gcd);
+  pixelRatio.h = int(double(pixelRatio.h) / gcd);
   Tx tx(sprite);
   tx(new cmd::SetPixelRatio(sprite, pixelRatio));
   tx.commit();
@@ -1003,6 +1011,65 @@ int Sprite_set_tileManagementPlugin(lua_State* L)
     tx.commit();
   }
   return 0;
+}
+
+int Sprite_get_useLayerUuids(lua_State* L)
+{
+  auto* sprite = get_docobj<Sprite>(L, 1);
+  lua_pushboolean(L, sprite->useLayerUuids());
+  return 1;
+}
+
+int Sprite_set_useLayerUuids(lua_State* L)
+{
+  auto* sprite = get_docobj<Sprite>(L, 1);
+  if (lua_isboolean(L, 2)) {
+    const bool value = lua_toboolean(L, 2);
+    sprite->useLayerUuids(value);
+  }
+  return 0;
+}
+
+int Sprite_get_undoHistory(lua_State* L)
+{
+  const auto* sprite = get_docobj<Sprite>(L, 1);
+  const auto* doc = static_cast<Doc*>(sprite->document());
+  const auto* history = doc->undoHistory();
+
+  if (!history) {
+    lua_pushnil(L);
+    return 1;
+  }
+
+  const undo::UndoState* currentState = history->currentState();
+  const undo::UndoState* s = history->firstState();
+  const bool canRedo = history->canRedo();
+  bool pastCurrent = !currentState && canRedo;
+
+  int undoSteps = 0;
+  int redoSteps = 0;
+  while (s) {
+    if (pastCurrent && canRedo)
+      redoSteps++;
+    else if (currentState || !canRedo)
+      undoSteps++;
+
+    if (s == currentState || !currentState)
+      pastCurrent = true;
+
+    s = s->next();
+  }
+
+  lua_newtable(L);
+  setfield_integer(L, "undoSteps", undoSteps);
+  setfield_integer(L, "redoSteps", redoSteps);
+  return 1;
+}
+
+int Sprite_get_isValid(lua_State* L)
+{
+  lua_pushboolean(L, may_get_docobj<Sprite>(L, 1) ? true : false);
+  return 1;
 }
 
 const luaL_Reg Sprite_methods[] = {
@@ -1069,6 +1136,9 @@ const Property Sprite_properties[] = {
   { "pixelRatio",           Sprite_get_pixelRatio,           Sprite_set_pixelRatio           },
   { "events",               Sprite_get_events,               nullptr                         },
   { "tileManagementPlugin", Sprite_get_tileManagementPlugin, Sprite_set_tileManagementPlugin },
+  { "useLayerUuids",        Sprite_get_useLayerUuids,        Sprite_set_useLayerUuids        },
+  { "undoHistory",          Sprite_get_undoHistory,          nullptr                         },
+  { "isValid",              Sprite_get_isValid,              nullptr                         },
   { nullptr,                nullptr,                         nullptr                         }
 };
 

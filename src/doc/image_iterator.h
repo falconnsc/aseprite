@@ -10,6 +10,7 @@
 #pragma once
 
 #include "doc/color.h"
+#include "doc/image_traits.h"
 #include "doc/primitives_fast.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
@@ -169,7 +170,9 @@ public:
 };
 
 //////////////////////////////////////////////////////////////////////
-// Iterator for BitmapTraits
+// Iterator for BitmapTraits when it's 1bpp
+
+#if DOC_USE_BITMAP_AS_1BPP
 
 class BitPixelAccess {
 public:
@@ -401,6 +404,8 @@ public:
   {
   }
 };
+
+#endif // DOC_USE_BITMAP_AS_1BPP
 
 } // namespace doc
 

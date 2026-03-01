@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +13,6 @@
 #include "app/commands/command.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
-#include "app/commands/filters/filter_worker.h"
 #include "app/commands/new_params.h"
 #include "app/context.h"
 #include "app/ini_file.h"
@@ -196,8 +195,7 @@ protected:
   void onExecute(Context* context) override;
 };
 
-OutlineCommand::OutlineCommand()
-  : CommandWithNewParams<OutlineParams>(CommandId::Outline(), CmdRecordableFlag)
+OutlineCommand::OutlineCommand() : CommandWithNewParams<OutlineParams>(CommandId::Outline())
 {
 }
 
@@ -264,7 +262,7 @@ void OutlineCommand::onExecute(Context* context)
     }
   }
   else {
-    start_filter_worker(&filterMgr);
+    filterMgr.startWorker(false);
   }
 }
 

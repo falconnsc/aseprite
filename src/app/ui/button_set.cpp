@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2018-2024  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -124,6 +124,7 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
 
       if (static_cast<MouseMessage*>(msg)->left() && !buttonSet()->m_triggerOnMouseUp) {
         onClick();
+        return true;
       }
       break;
 
@@ -136,11 +137,14 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
         invalidate();
 
         if (static_cast<MouseMessage*>(msg)->left()) {
-          if (buttonSet()->m_triggerOnMouseUp)
+          if (buttonSet()->m_triggerOnMouseUp) {
             onClick();
+            return true;
+          }
         }
         else if (static_cast<MouseMessage*>(msg)->right()) {
           onRightClick();
+          return true;
         }
       }
       break;
@@ -187,8 +191,8 @@ void ButtonSet::Item::onRightClick()
   buttonSet()->onRightClick(this);
 }
 
-ButtonSet::ButtonSet(int columns)
-  : Grid(columns, false)
+ButtonSet::ButtonSet(const int columns, const bool same_width_columns)
+  : Grid(columns, same_width_columns)
   , m_offerCapture(true)
   , m_triggerOnMouseUp(false)
   , m_multiMode(MultiMode::One)

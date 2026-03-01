@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -9,8 +9,11 @@
 #define APP_UI_TABS_H_INCLUDED
 #pragma once
 
+#include "app/ui/dockable.h"
 #include "base/ref.h"
+#include "text/fwd.h"
 #include "ui/animated_widget.h"
+#include "ui/layer.h"
 #include "ui/widget.h"
 
 #include <memory>
@@ -18,8 +21,7 @@
 
 namespace ui {
 class Graphics;
-class Overlay;
-} // namespace ui
+}
 
 namespace app {
 class Tabs;
@@ -117,10 +119,12 @@ public:
 
 // Tabs control. Used to show opened documents.
 class Tabs : public ui::Widget,
-             public ui::AnimatedWidget {
+             public ui::AnimatedWidget,
+             public Dockable {
   struct Tab {
     TabView* view;
     std::string text;
+    text::TextBlobRef textBlob;
     TabIcon icon;
     gfx::Color color;
     int x, width;
@@ -179,12 +183,16 @@ public:
   void removeDropViewPreview();
   int getDropTabIndex() const { return m_dropNewIndex; }
 
+  // Dockable impl
+  int dockableAt() const override { return ui::TOP | ui::BOTTOM; }
+
 protected:
   bool onProcessMessage(ui::Message* msg) override;
   void onInitTheme(ui::InitThemeEvent& ev) override;
   void onPaint(ui::PaintEvent& ev) override;
   void onResize(ui::ResizeEvent& ev) override;
   void onSizeHint(ui::SizeHintEvent& ev) override;
+  float onGetTextBaseline() const override;
   void onAnimationFrame() override;
   void onAnimationStop(int animation) override;
 
@@ -206,9 +214,9 @@ private:
   gfx::Rect getTabBounds(Tab* tab);
   void startReorderTabsAnimation();
   void startRemoveDragTabAnimation();
-  void createFloatingOverlay(Tab* tab);
+  void createFloatingUILayer(Tab* tab);
   void destroyFloatingTab();
-  void destroyFloatingOverlay();
+  void destroyFloatingUILayer();
   void updateMouseCursor();
   void updateDragTabIndexes(int mouseX, bool force_animation);
   void updateDragCopyCursor(ui::Message* msg);
@@ -287,15 +295,18 @@ private:
   // location).
   TabPtr m_floatingTab;
 
-  // Overlay used to show the floating tab outside the Tabs widget
-  // (this overlay floats next to the mouse cursor).  It's destroyed
+  // UILayer used to show the floating tab outside the Tabs widget
+  // (this layer floats next to the mouse cursor).  It's destroyed
   // and recreated every time the tab is put inside or outside the
   // Tabs widget.
-  base::Ref<ui::Overlay> m_floatingOverlay;
+  ui::UILayerRef m_floatingUILayer;
 
   // Relative mouse position inside the m_dragTab (used to adjust
-  // the m_floatingOverlay precisely).
+  // the m_floatingUILayer precisely).
   gfx::Point m_floatingOffset;
+
+  // Holds the connection to Context::BeforeCommandExecution
+  obs::scoped_connection m_beforeCmdConn;
 
   ////////////////////////////////////////
   // Drop new tabs

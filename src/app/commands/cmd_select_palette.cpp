@@ -17,8 +17,7 @@
 #include "app/modules/palettes.h"
 #include "app/site.h"
 #include "doc/cel.h"
-#include "doc/frame_range.h"
-#include "doc/image_bits.h"
+#include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/layer_tilemap.h"
 #include "doc/octree_map.h"
@@ -51,7 +50,7 @@ private:
 };
 
 SelectPaletteColorsCommand::SelectPaletteColorsCommand()
-  : Command(CommandId::SelectPaletteColors(), CmdRecordableFlag)
+  : Command(CommandId::SelectPaletteColors())
   , m_modifier(Modifier::UsedColors)
 {
 }
@@ -105,12 +104,12 @@ void SelectPaletteColorsCommand::onExecute(Context* context)
 {
   Site site = context->activeSite();
   Sprite* sprite = site.sprite();
-  DocRange range = site.range();
+  view::RealRange range = site.range();
   SelectedFrames selectedFrames;
   SelectedLayers selectedLayers;
-  if (range.type() == DocRange::Type::kNone) {
+  if (range.type() == view::Range::Type::kNone) {
     // If there isn't a cels range selected, it assumes the whole sprite:
-    range.startRange(site.layer(), 0, DocRange::Type::kFrames);
+    range.startRange(site.layer(), 0, view::Range::Type::kFrames);
     range.endRange(site.layer(), sprite->lastFrame());
     selectedFrames = range.selectedFrames();
     selectedLayers.selectAllLayers(sprite->root());
@@ -132,7 +131,8 @@ void SelectPaletteColorsCommand::onExecute(Context* context)
 
         case IMAGE_INDEXED:
           doc::for_each_pixel<IndexedTraits>(image, [&usedEntries](const color_t p) {
-            usedEntries[p] = true;
+            if (p >= 0 && p < usedEntries.size())
+              usedEntries[p] = true;
           });
           break;
       }
@@ -148,12 +148,13 @@ void SelectPaletteColorsCommand::onExecute(Context* context)
           // Tilemap layer case
           if (layer->isTilemap()) {
             Tileset* tileset = static_cast<LayerTilemap*>(layer)->tileset();
-            tile_index ti;
             PalettePicks usedTiles(tileset->size());
 
             // Looking for tiles (available in tileset) used in the tilemap image:
-            doc::for_each_pixel<TilemapTraits>(image, [&usedTiles, &tileset, &ti](const tile_t t) {
-              if (tileset->findTileIndex(tileset->get(t), ti))
+            doc::for_each_pixel<TilemapTraits>(image, [&usedTiles, tileset](const tile_t t) {
+              tile_index ti = notile;
+              tileset->findTileIndex(tileset->get(t), ti);
+              if (ti >= 0 && ti < usedTiles.size())
                 usedTiles[ti] = true;
             });
 

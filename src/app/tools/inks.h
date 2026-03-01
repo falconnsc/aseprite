@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2022  Igara Studio S.A.
+// Copyright (C) 2018-2024  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -31,10 +31,14 @@ public:
     m_proc->processScanline(x1, y, x2, loop);
   }
 
-  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override
+  void prepareForPointShape(ToolLoop* loop,
+                            bool firstPoint,
+                            int x,
+                            int y,
+                            doc::SymmetryIndex symmetry) override
   {
     ASSERT(m_proc);
-    m_proc->prepareForPointShape(loop, firstPoint, x, y);
+    m_proc->prepareForPointShape(loop, firstPoint, x, y, symmetry);
   }
 
   void prepareVForPointShape(ToolLoop* loop, int y) override
@@ -287,9 +291,15 @@ public:
     if (m_createSlice)
       m_maxBounds |= rc;
     else {
-      rc &= loop->getDstImage()->bounds();
-      for (int v = rc.y; v < rc.y2(); ++v)
-        BaseInk::inkHline(rc.x, v, rc.x2() - 1, loop);
+      if (loop->isSelectionToolLoop()) {
+        rc &= loop->sprite()->bounds();
+        loop->addSelectionToolPoint(rc);
+      }
+      else {
+        rc &= loop->getDstImage()->bounds();
+        for (int v = rc.y; v < rc.y2(); ++v)
+          BaseInk::inkHline(rc.x, v, rc.x2() - 1, loop);
+      }
     }
   }
 
@@ -300,7 +310,8 @@ public:
       m_maxBounds = gfx::Rect(0, 0, 0, 0);
     }
     else {
-      m_maxBounds &= loop->getDstImage()->bounds();
+      m_maxBounds &= (loop->isSelectionToolLoop() ? loop->sprite()->bounds() :
+                                                    loop->getDstImage()->bounds());
       loop->onSliceRect(m_maxBounds);
     }
   }
@@ -452,9 +463,15 @@ public:
       m_maxBounds |= rc;
     }
     else {
-      rc &= loop->getDstImage()->bounds();
-      for (int v = rc.y; v < rc.y2(); ++v)
-        BaseInk::inkHline(rc.x, v, rc.x2() - 1, loop);
+      if (loop->isSelectionToolLoop()) {
+        rc &= loop->sprite()->bounds();
+        loop->addSelectionToolPoint(rc);
+      }
+      else {
+        rc &= loop->getDstImage()->bounds();
+        for (int v = rc.y; v < rc.y2(); ++v)
+          BaseInk::inkHline(rc.x, v, rc.x2() - 1, loop);
+      }
     }
   }
 
@@ -488,13 +505,22 @@ public:
       m_mask.unfreeze();
 
       loop->setMask(&m_mask);
-      double cornerThick = (loop->isTilemapMode()) ? CORNER_THICK_FOR_TILEMAP_MODE :
-                                                     CORNER_THICK_FOR_PIXELS_MODE;
+      const float cornerThick = (loop->isTilemapMode() ? CORNER_THICK_FOR_TILEMAP_MODE :
+                                                         CORNER_THICK_FOR_PIXELS_MODE);
       loop->getDocument()->setTransformation(Transformation(RectF(m_mask.bounds()), cornerThick));
 
       m_mask.clear();
     }
   }
+};
+
+class TextInk : public BaseInk {
+public:
+  Ink* clone() override { return new TextInk(*this); }
+
+  bool isText() const override { return true; }
+
+  void prepareInk(ToolLoop* loop) override { setProc(get_ink_proc<XorInkProcessing>(loop)); }
 };
 
 }} // namespace app::tools

@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2019-2022 Igara Studio S.A.
+// Copyright (c) 2019-2025 Igara Studio S.A.
 // Copyright (c) 2001-2017 David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -397,30 +397,19 @@ static void set_lum(double& r, double& g, double& b, double l)
   clip_color(r, g, b);
 }
 
-// TODO replace this with a better impl (and test this, not sure if it's correct)
 static void set_sat(double& r, double& g, double& b, double s)
 {
-#undef MIN
-#undef MAX
-#undef MID
-#define MIN(x, y) (((x) < (y)) ? (x) : (y))
-#define MAX(x, y) (((x) > (y)) ? (x) : (y))
-#define MID(x, y, z)                                                                               \
-  ((x) > (y) ? ((y) > (z) ? (y) : ((x) > (z) ? (z) : (x))) :                                       \
-               ((y) > (z) ? ((z) > (x) ? (z) : (x)) : (y)))
+  const double minv = std::min(std::min(r, g), b);
+  const double maxv = std::max(std::max(r, g), b);
+  const double range = maxv - minv;
 
-  double& min = MIN(r, MIN(g, b));
-  double& mid = MID(r, g, b);
-  double& max = MAX(r, MAX(g, b));
-
-  if (max > min) {
-    mid = ((mid - min) * s) / (max - min);
-    max = s;
+  if (range > 0.0) {
+    r = ((r - minv) * s) / range;
+    g = ((g - minv) * s) / range;
+    b = ((b - minv) * s) / range;
   }
   else
-    mid = max = 0;
-
-  min = 0;
+    r = g = b = 0.0;
 }
 
 color_t rgba_blender_hsl_hue(color_t backdrop, color_t src, int opacity)
@@ -509,7 +498,7 @@ color_t rgba_blender_subtract(color_t backdrop, color_t src, int opacity)
   int r = rgba_getr(backdrop) - rgba_getr(src);
   int g = rgba_getg(backdrop) - rgba_getg(src);
   int b = rgba_getb(backdrop) - rgba_getb(src);
-  src = rgba(MAX(r, 0), MAX(g, 0), MAX(b, 0), 0) | (src & rgba_a_mask);
+  src = rgba(std::max(r, 0), std::max(g, 0), std::max(b, 0), 0) | (src & rgba_a_mask);
   return rgba_blender_normal(backdrop, src, opacity);
 }
 

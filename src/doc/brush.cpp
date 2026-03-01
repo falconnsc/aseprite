@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-2025  Igara Studio S.A.
 // Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -13,18 +13,19 @@
 
 #include "base/pi.h"
 #include "doc/algo.h"
+#include "doc/algorithm/flip_image.h"
 #include "doc/algorithm/polygon.h"
 #include "doc/blend_internals.h"
 #include "doc/image.h"
-#include "doc/image_impl.h"
 #include "doc/primitives.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace doc {
 
-static int generation = 0;
+static std::atomic<int> g_generation = 0;
 
 Brush::Brush()
 {
@@ -279,6 +280,7 @@ void Brush::setImageColor(const ImageColor imageColor, const color_t color)
                                    (m_bgColor ? *m_bgColor : 0));
       break;
   }
+  resetSymmetries();
 }
 
 void Brush::resetImageColors()
@@ -299,7 +301,7 @@ void Brush::setCenter(const gfx::Point& center)
 // Cleans the brush's data (image and region).
 void Brush::clean()
 {
-  m_gen = ++generation;
+  m_gen = ++g_generation;
   m_image.reset();
   m_maskBitmap.reset();
   m_backupImage.reset();
@@ -310,6 +312,126 @@ static void algo_hline(int x1, int y, int x2, void* data)
   draw_hline(reinterpret_cast<Image*>(data), x1, y, x2, BitmapTraits::max_value);
 }
 
+void Brush::resetSymmetries()
+{
+  m_symmetryImages.resize(0);
+  m_symmetryMasks.resize(0);
+}
+
+void Brush::reserveSymmetries()
+{
+  m_symmetryImages.resize(int(SymmetryIndex::ELEMENTS));
+  m_symmetryMasks.resize(int(SymmetryIndex::ELEMENTS));
+}
+
+Image* Brush::getSymmetryImage(const SymmetryIndex index)
+{
+  if (index <= SymmetryIndex::ORIGINAL || index >= SymmetryIndex::ELEMENTS)
+    return m_image.get();
+
+  if (m_symmetryImages.empty())
+    reserveSymmetries();
+
+  const int i = int(index);
+  if (!m_symmetryImages[i]) {
+    switch (index) {
+      case SymmetryIndex::FLIPPED_X:
+      case SymmetryIndex::FLIPPED_Y: {
+        const doc::algorithm::FlipType flip = (index == SymmetryIndex::FLIPPED_X ?
+                                                 doc::algorithm::FlipType::FlipHorizontal :
+                                                 doc::algorithm::FlipType::FlipVertical);
+        if (m_image) {
+          std::unique_ptr<Image> tempImage(Image::createCopy(m_image.get()));
+
+          doc::algorithm::flip_image(tempImage.get(), tempImage->bounds(), flip);
+          m_symmetryImages[i].reset(tempImage.release());
+        }
+        if (m_maskBitmap && !m_symmetryMasks[i]) {
+          std::unique_ptr<Image> tempImage(Image::createCopy(m_maskBitmap.get()));
+          doc::algorithm::flip_image(tempImage.get(), tempImage->bounds(), flip);
+          m_symmetryMasks[i].reset(tempImage.release());
+        }
+        break;
+      }
+      case SymmetryIndex::FLIPPED_XY: {
+        if (m_image) {
+          std::unique_ptr<Image> tempImage(Image::createCopy(m_image.get()));
+          doc::algorithm::flip_image(tempImage.get(),
+                                     tempImage->bounds(),
+                                     doc::algorithm::FlipType::FlipVertical);
+          doc::algorithm::flip_image(tempImage.get(),
+                                     tempImage->bounds(),
+                                     doc::algorithm::FlipType::FlipHorizontal);
+          m_symmetryImages[i].reset(tempImage.release());
+        }
+        if (m_maskBitmap && !m_symmetryMasks[i]) {
+          std::unique_ptr<Image> tempImage(Image::createCopy(m_maskBitmap.get()));
+          doc::algorithm::flip_image(tempImage.get(),
+                                     tempImage->bounds(),
+                                     doc::algorithm::FlipType::FlipVertical);
+          doc::algorithm::flip_image(tempImage.get(),
+                                     tempImage->bounds(),
+                                     doc::algorithm::FlipType::FlipHorizontal);
+          m_symmetryMasks[i].reset(tempImage.release());
+        }
+        break;
+      }
+      case SymmetryIndex::ROT_FLIP_90:
+      case SymmetryIndex::ROT_FLIP_270: {
+        const double angle = (index == SymmetryIndex::ROT_FLIP_90 ? 90.0 : -90.0);
+        if (m_image) {
+          std::unique_ptr<Image> tempImage(
+            Image::create(m_image->pixelFormat(), m_image->height(), m_image->width()));
+          rotate_image(m_image.get(), tempImage.get(), angle);
+          doc::algorithm::flip_image(tempImage.get(),
+                                     tempImage->bounds(),
+                                     doc::algorithm::FlipType::FlipHorizontal);
+          m_symmetryImages[i].reset(tempImage.release());
+        }
+        if (m_maskBitmap && !m_symmetryMasks[i]) {
+          std::unique_ptr<Image> tempImage(Image::create(m_maskBitmap->pixelFormat(),
+                                                         m_maskBitmap->height(),
+                                                         m_maskBitmap->width()));
+          rotate_image(m_maskBitmap.get(), tempImage.get(), angle);
+          doc::algorithm::flip_image(tempImage.get(),
+                                     tempImage->bounds(),
+                                     doc::algorithm::FlipType::FlipHorizontal);
+          m_symmetryMasks[i].reset(tempImage.release());
+        }
+        break;
+      }
+      case SymmetryIndex::ROTATED_90:
+      case SymmetryIndex::ROTATED_270: {
+        const double angle = (index == SymmetryIndex::ROTATED_90 ? 90.0 : -90.0);
+        if (m_image) {
+          std::unique_ptr<Image> tempImage(Image::create(m_image.get()->pixelFormat(),
+                                                         m_image.get()->height(),
+                                                         m_image.get()->width()));
+          rotate_image(m_image.get(), tempImage.get(), angle);
+          m_symmetryImages[i].reset(tempImage.release());
+        }
+        if (m_maskBitmap && !m_symmetryMasks[i]) {
+          std::unique_ptr<Image> tempImage(Image::create(m_maskBitmap->pixelFormat(),
+                                                         m_maskBitmap->height(),
+                                                         m_maskBitmap->width()));
+          rotate_image(m_maskBitmap.get(), tempImage.get(), angle);
+          m_symmetryMasks[i].reset(tempImage.release());
+        }
+      }
+    }
+  }
+  return m_symmetryImages[i].get();
+}
+
+Image* Brush::getSymmetryMask(const SymmetryIndex index)
+{
+  if (index <= SymmetryIndex::ORIGINAL || index >= SymmetryIndex::ELEMENTS)
+    return m_maskBitmap.get();
+
+  getSymmetryImage(index); // Update Image and Mask symmetry buffers
+  return m_symmetryMasks[int(index)].get();
+}
+
 // Regenerates the brush bitmap and its rectangle's region.
 void Brush::regenerate()
 {
@@ -318,8 +440,8 @@ void Brush::regenerate()
   ASSERT(m_size > 0);
 
   int size = m_size;
-  if (m_type == kSquareBrushType && m_angle != 0 && m_size > 2)
-    size = (int)std::sqrt((double)2 * m_size * m_size) + 2;
+  if (m_type == kSquareBrushType && m_angle != 0 && m_size > 3)
+    size = (int)std::ceil(std::sqrt((double)2 * m_size * m_size));
 
   m_image.reset(Image::create(IMAGE_BITMAP, size, size));
   m_maskBitmap.reset();
@@ -342,18 +464,55 @@ void Brush::regenerate()
           clear_image(m_image.get(), BitmapTraits::max_value);
         }
         else {
-          double a = PI * m_angle / 180;
-          int c = size / 2;
-          int r = m_size / 2;
-          int d = m_size;
-          int x1 = int(c + r * cos(a - PI / 2) + r * cos(a - PI));
-          int y1 = int(c - r * sin(a - PI / 2) - r * sin(a - PI));
-          int x2 = int(x1 + d * cos(a));
-          int y2 = int(y1 - d * sin(a));
-          int x3 = int(x2 + d * cos(a + PI / 2));
-          int y3 = int(y2 - d * sin(a + PI / 2));
-          int x4 = int(x3 + d * cos(a + PI));
-          int y4 = int(y3 - d * sin(a + PI));
+          double angle = PI * m_angle / 180;
+          double sin = std::sin(angle);
+          double cos = std::cos(angle);
+
+          int x1, y1, x2, y2, x3, y3, x4, y4;
+          if (size == 3) {
+            // When angle between [-22.5, 22.5] or [-157.5, 157.5] or
+            // [67.5, 112.5] or [-67.5, -112.5], draw a 3x3 rect.
+            if (ABS(cos) >= 0.92387953 || ABS(cos) <= 0.38268343) {
+              x1 = 0;
+              y1 = 0;
+              x2 = 2;
+              y2 = 0;
+              x3 = 2;
+              y3 = 2;
+              x4 = 0;
+              y4 = 2;
+            }
+            // Draw a 3x3 cross
+            else {
+              x1 = 1;
+              y1 = 0;
+              x2 = 2;
+              y2 = 1;
+              x3 = 1;
+              y3 = 2;
+              x4 = 0;
+              y4 = 1;
+            }
+          }
+          else {
+            // Based in code of IntertwineAsRectangles::rotateRectangle function.
+            int c = size / 2;
+            int a = m_size / 2;
+            int b = a;
+            int ac = a * cos;
+            int bs = b * sin;
+            int as = bs;
+            int bc = ac;
+
+            x1 = c - ac - bs;
+            y1 = c + as - bc;
+            x2 = c + ac - bs;
+            y2 = c - as - bc;
+            x3 = c + ac + bs;
+            y3 = c - as + bc;
+            x4 = c - ac + bs;
+            y4 = c + as + bc;
+          }
           int points[8] = { x1, y1, x2, y2, x3, y3, x4, y4 };
 
           doc::algorithm::polygon(4, points, m_image.get(), algo_hline);
